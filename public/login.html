@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>登录 · 局域网中继站</title>
+<style>
+  /* ============ 设计令牌 · 瑞士国际主义 × 工业仪表 ============ */
+  :root{
+    --paper:#f5f4f0; --panel:#ffffff; --ink:#12100d; --ink-2:#6b665c; --ink-3:#9a958a;
+    --line:#e2e0da; --line-2:#c9c6bd;
+    --red:#d94f2b; --red-dark:#b23c1e; --red-soft:#f8e8e2;
+    --ok:#1f7a4d; --warn:#a67c00; --bad:#b3261e;
+    --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+    --r:2px;
+    --f-sans:"Helvetica Neue",Helvetica,Arial,"PingFang SC","Microsoft YaHei",sans-serif;
+    --f-mono:ui-monospace,"SF Mono","Cascadia Mono",Consolas,"Liberation Mono",monospace;
+    --t-fast:.15s; --t-mid:.3s; --ease:cubic-bezier(.25,.46,.45,.94);
+    --shadow:0 1px 2px rgba(18,16,13,.06),0 6px 18px rgba(18,16,13,.05);
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    padding:var(--s5) var(--s4);background:var(--paper);color:var(--ink);
+    font:15px/1.65 var(--f-sans);
+    background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:32px 32px;background-position:-1px -1px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .sheet{
+    width:100%;max-width:400px;background:var(--panel);
+    border:1px solid var(--line-2);border-top:4px solid var(--red);
+    box-shadow:var(--shadow);
+    animation:sheetIn .35s var(--ease) both;
+  }
+  @keyframes sheetIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  .sheet-hd{padding:var(--s6) var(--s6) var(--s4);border-bottom:1px solid var(--line)}
+  .mark{display:flex;align-items:center;gap:var(--s3);margin-bottom:var(--s4)}
+  .mark .glyph{width:34px;height:34px;background:var(--red);color:#fff;display:grid;place-items:center;
+    font:700 15px/1 var(--f-mono);letter-spacing:-.5px}
+  .mark .word{font:600 13px/1 var(--f-sans);letter-spacing:.22em;text-transform:uppercase;color:var(--ink)}
+  .sheet-hd h1{margin:0;font:700 26px/1.2 var(--f-sans);letter-spacing:-.02em}
+  .sheet-hd .sub{margin-top:var(--s2);color:var(--ink-2);font-size:13.5px}
+  .sheet-hd .meta{margin-top:var(--s4);display:flex;gap:var(--s4);font:500 11px/1 var(--f-mono);
+    color:var(--ink-3);letter-spacing:.06em}
+  .meta b{color:var(--ink-2);font-weight:600}
+  form{padding:var(--s5) var(--s6) var(--s6)}
+  .field{margin-bottom:var(--s5)}
+  .field label{display:flex;justify-content:space-between;align-items:baseline;
+    font:600 11px/1 var(--f-sans);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2);margin-bottom:var(--s2)}
+  .field input{
+    width:100%;font:400 16px/1.4 var(--f-mono);color:var(--ink);background:transparent;
+    border:none;border-bottom:1.5px solid var(--line-2);border-radius:0;
+    padding:10px 2px;outline:none;transition:border-color var(--t-fast),background var(--t-fast);
+  }
+  .field input::placeholder{color:var(--ink-3);font-family:var(--f-sans);font-size:14px}
+  .field input:hover{border-bottom-color:var(--ink-3)}
+  .field input:focus{border-bottom-color:var(--red);background:var(--red-soft)}
+  .field input:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+  .btn{
+    position:relative;width:100%;font:700 14px/1 var(--f-sans);letter-spacing:.1em;text-transform:uppercase;
+    color:#fff;background:var(--red);border:none;border-radius:var(--r);
+    padding:15px 18px;cursor:pointer;transition:background var(--t-fast),transform var(--t-fast);
+  }
+  .btn:hover{background:var(--red-dark)}
+  .btn:active{transform:translateY(1px)}
+  .btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  .btn[disabled]{background:var(--line-2);color:var(--ink-3);cursor:not-allowed;transform:none}
+  .err{
+    display:none;margin-top:var(--s4);padding:9px 12px;background:var(--red-soft);
+    border-left:3px solid var(--bad);color:var(--bad);font-size:13px;
+  }
+  .err.show{display:flex;align-items:center;gap:8px;animation:sheetIn .25s var(--ease) both}
+  .err .tick{width:14px;height:14px;flex:none;border:2px solid var(--bad);border-radius:50%}
+  .sheet-ft{padding:var(--s3) var(--s6);border-top:1px dashed var(--line-2);
+    font:500 11.5px/1.7 var(--f-sans);color:var(--ink-3);display:flex;justify-content:space-between;gap:var(--s3)}
+  .sheet-ft code{font:500 11px/1 var(--f-mono);color:var(--ink-2);background:var(--paper);padding:2px 5px;border:1px solid var(--line)}
+  @media (max-width:380px){
+    .sheet-hd{padding:var(--s5) var(--s5) var(--s3)} form{padding:var(--s4) var(--s5) var(--s5)}
+    .sheet-hd h1{font-size:22px} .sheet-ft{padding:var(--s3) var(--s5);flex-direction:column;gap:4px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+  }
+</style>
+</head>
+<body>
+<main class="sheet">
+  <header class="sheet-hd">
+    <div class="mark">
+      <span class="glyph" aria-hidden="true">TR</span>
+      <span class="word">LAN Relay Station</span>
+    </div>
+    <h1>中继站登录</h1>
+    <p class="sub">文件互传 · 文字便签 · 网页中转 · 聊天</p>
+    <div class="meta"><span>NODE <b>iflytek</b></span><span>PROTO <b>WPA2 / LAN</b></span></div>
+  </header>
+
+  <form method="POST" action="/auth/login" autocomplete="off">
+    <input type="hidden" name="next" id="next" value="/relay">
+    <div class="field">
+      <label for="user">账号 <span>ACCOUNT</span></label>
+      <input id="user" name="user" required autofocus placeholder="输入账号" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="password">密码 <span>PASSKEY</span></label>
+      <input id="password" name="password" type="password" required placeholder="输入密码" autocomplete="current-password">
+    </div>
+    <button class="btn" id="submitBtn" type="submit">登录 →</button>
+    <div class="err" id="err" role="alert" aria-live="assertive"><span class="tick" aria-hidden="true"></span>账号或密码错误,请重试</div>
+  </form>
+
+  <footer class="sheet-ft">
+    <span>仅限局域网</span>
+    <span>忘记密码 → 服务器 <code>config.json</code></span>
+  </footer>
+</main>
+
+<script>
+(function(){
+  'use strict';
+  var q = new URLSearchParams(location.search);
+  if (q.get('e')) document.getElementById('err').classList.add('show');
+  var n = q.get('next');
+  if (n && n.charAt(0)==='/' && n.charAt(1)!=='/') document.getElementById('next').value = n;
+  var f = document.querySelector('form'), b = document.getElementById('submitBtn');
+  f.addEventListener('submit', function(){
+    if (!b.disabled){ b.disabled = true; b.textContent = '验证中…'; setTimeout(function(){ b.disabled=false; b.textContent='登录 →'; }, 8000); }
+  });
+})();
+</script>
+</body>
+</html>

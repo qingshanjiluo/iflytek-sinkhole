@@ -1,0 +1,25 @@
+# 运行时数据(不入库:聊天/文件/会话是本机私有数据,服务会自动重建目录)
+storage/
+
+# 日志(服务启动自动重建 logs/)
+logs/
+
+# 便携 Node 运行时(~99MB,不入库;新机器用 setup-on-this-pc.ps1 -BundleRuntime 下载)
+runtime/
+
+# 证书私钥(不入库;certs/iflytek.cer 公钥证书入库,供设备信任)
+certs/*.pfx
+certs/*.key
+certs/*.p12
+
+# 打包产物(用 make-installer.ps1 重新生成)
+dist/
+
+# 构建/编辑器杂项
+*.tmp
+*.log
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/

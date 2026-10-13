@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>局域网中继站 · 文件互传 / 聊天 / 网页中转</title>
+<style>
+/* ================================================================
+   设计系统 · 瑞士国际主义 × 工业仪表
+   主张:纸白底 = 公文/货单质感;墨黑 = 正文权威;单一朱红 = 信号/印章;
+   细发丝线分隔 = 仪表刻度;等宽数字 = 数据读数。零渐变、零圆角堆砌、零 emoji。
+   ================================================================ */
+:root{
+  --paper:#f5f4f0; --panel:#fff; --ink:#12100d; --ink-2:#6b665c; --ink-3:#9a958a;
+  --line:#e2e0da; --line-2:#c9c6bd; --line-3:#8f8b81;
+  --red:#d94f2b; --red-dark:#b23c1e; --red-soft:#f8e8e2;
+  --ok:#1f7a4d; --ok-soft:#e4f1ea; --warn:#a67c00; --bad:#b3261e; --bad-soft:#f7e7e6;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
+  --r:2px;
+  --f-sans:"Helvetica Neue",Helvetica,Arial,"PingFang SC","Microsoft YaHei",sans-serif;
+  --f-mono:ui-monospace,"SF Mono","Cascadia Mono",Consolas,"Liberation Mono",monospace;
+  --t-fast:.15s; --t-mid:.3s; --t-slow:.5s; --ease:cubic-bezier(.25,.46,.45,.94);
+  --shadow:0 1px 2px rgba(18,16,13,.06),0 6px 18px rgba(18,16,13,.05);
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{
+  margin:0;min-height:100vh;background:var(--paper);color:var(--ink);
+  font:15px/1.65 var(--f-sans);-webkit-font-smoothing:antialiased;
+  background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+  background-size:32px 32px;background-position:-1px -1px;
+}
+a{color:var(--red);text-decoration:none;border-bottom:1px solid transparent;transition:border-color var(--t-fast)}
+a:hover{border-bottom-color:var(--red)}
+:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+::selection{background:var(--red-soft)}
+.wrap{max-width:1000px;margin:0 auto;padding:0 var(--s4) 90px}
+
+/* ---------- 顶栏 ---------- */
+.topbar{
+  display:flex;align-items:center;gap:var(--s3);
+  padding:var(--s3) 0;border-bottom:2px solid var(--ink);
+  margin-bottom:var(--s6);flex-wrap:wrap;
+}
+.glyph{width:30px;height:30px;flex:none;background:var(--red);color:#fff;display:grid;place-items:center;
+  font:700 13px/1 var(--f-mono);letter-spacing:-.5px}
+.word{font:600 12px/1 var(--f-sans);letter-spacing:.2em;text-transform:uppercase}
+.topbar .sp{flex:1}
+.chip{
+  display:inline-flex;align-items:center;gap:7px;font:500 12px/1 var(--f-sans);
+  border:1px solid var(--line-2);background:var(--panel);padding:7px 10px;
+}
+.chip b{font-weight:700;letter-spacing:.04em}
+.chip.admin{border-color:var(--red);color:var(--red)}
+.chip-btn{cursor:pointer;transition:border-color var(--t-fast),color var(--t-fast)}
+.chip-btn:hover{border-color:var(--ink);color:var(--ink)}
+.chip-btn.on{border-color:var(--red);color:var(--red)}
+
+/* ---------- 刊头 ---------- */
+.masthead{margin-bottom:var(--s6)}
+.masthead h1{
+  margin:0;font:800 clamp(30px,6vw,46px)/1.1 var(--f-sans);
+  letter-spacing:-.03em;text-transform:uppercase;
+}
+.masthead h1 em{font-style:normal;color:var(--red)}
+.masthead .kicker{
+  margin-top:var(--s2);display:flex;gap:var(--s4);flex-wrap:wrap;
+  font:500 11px/1 var(--f-mono);letter-spacing:.1em;color:var(--ink-3);text-transform:uppercase;
+}
+.masthead .kicker b{color:var(--ink-2);font-weight:600}
+
+/* ---------- 区块 ---------- */
+.sec{background:var(--panel);border:1px solid var(--line-2);margin-bottom:var(--s5);box-shadow:var(--shadow)}
+.sec-hd{
+  display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;
+  padding:var(--s3) var(--s5);border-bottom:1px solid var(--line);
+}
+.sec-no{font:700 12px/1 var(--f-mono);color:#fff;background:var(--ink);padding:5px 7px;letter-spacing:.08em}
+.sec-hd h2{margin:0;font:700 15px/1.3 var(--f-sans);letter-spacing:.06em;text-transform:uppercase}
+.sec-hd .n{font:400 12.5px/1.5 var(--f-sans);color:var(--ink-3)}
+.sec-hd .sp{flex:1}
+.sec-bd{padding:var(--s5)}
+
+/* ---------- 按钮(全组件状态) ---------- */
+.btn{
+  font:600 13px/1 var(--f-sans);letter-spacing:.05em;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line-2);border-radius:var(--r);padding:9px 15px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;
+  transition:border-color var(--t-fast),background var(--t-fast),color var(--t-fast),transform var(--t-fast);
+}
+.btn:hover{border-color:var(--ink);background:var(--paper)}
+.btn:active{transform:translateY(1px);background:var(--line)}
+.btn[disabled]{opacity:.45;cursor:not-allowed;transform:none}
+.btn.pri{background:var(--red);border-color:var(--red);color:#fff}
+.btn.pri:hover{background:var(--red-dark);border-color:var(--red-dark)}
+.btn.pri:active{background:#99321a}
+.btn.danger:hover{border-color:var(--bad);color:var(--bad);background:var(--bad-soft)}
+.btn.sm{padding:6px 10px;font-size:12px}
+.btn.ghost{border-style:dashed}
+
+/* ---------- 01 上传 ---------- */
+#drop{
+  border:2px dashed var(--line-2);padding:34px var(--s4);text-align:center;color:var(--ink-2);
+  cursor:pointer;transition:border-color var(--t-fast),background var(--t-fast);
+  background:var(--paper);
+}
+#drop:hover{border-color:var(--ink-3)}
+#drop.hov{border-color:var(--red);background:var(--red-soft);color:var(--red-dark)}
+#drop b{display:block;font:700 16px/1.5 var(--f-sans);letter-spacing:.02em}
+#drop .hint{font:500 11.5px/1.7 var(--f-mono);color:var(--ink-3);letter-spacing:.05em}
+#fileInput{display:none}
+.drow{display:flex;align-items:center;gap:var(--s3);padding:9px 12px;border:1px solid var(--line);
+  border-top:none;font-size:13px;background:var(--paper)}
+.drow:first-child{border-top:1px solid var(--line)}
+.drow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.dtrack{flex:none;width:170px;height:6px;background:var(--line);overflow:hidden}
+.dtrack i{display:block;height:100%;width:0;background:var(--red);transition:width .3s var(--ease)}
+.dpct{flex:none;width:150px;text-align:right;font:500 12px/1 var(--f-mono);color:var(--ink-2);
+  font-variant-numeric:tabular-nums}
+.drow.ok .dpct{color:var(--ok)} .drow.err .dpct{color:var(--bad)} .drow.ok .dtrack i{background:var(--ok)}
+
+/* ---------- 02 文件列表 ---------- */
+.frow{display:flex;align-items:center;gap:var(--s4);padding:13px var(--s5);border-bottom:1px solid var(--line);
+  transition:background var(--t-fast)}
+.frow:last-child{border-bottom:none}
+.frow:hover{background:var(--paper)}
+.fext{flex:none;min-width:52px;text-align:center;font:700 10.5px/1 var(--f-mono);letter-spacing:.06em;
+  color:var(--red-dark);background:var(--red-soft);border:1px solid #eccfc5;padding:6px 4px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fext.img{color:var(--ok);background:var(--ok-soft);border-color:#c4ddd0}
+.fext.doc{color:var(--ink);background:var(--line);border-color:var(--line-2)}
+.fext.vid{color:#7a5b00;background:#f6efd9;border-color:#e3d5ab}
+.fmeta{flex:1;min-width:0}
+.fname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;font-size:14.5px}
+.fdesc{color:var(--ink-3);font:500 11.5px/1.6 var(--f-mono);letter-spacing:.03em;margin-top:2px}
+.facts{display:flex;gap:6px;flex:none;flex-wrap:wrap;justify-content:flex-end}
+.empty{color:var(--ink-3);text-align:center;padding:30px 0;font-size:14px;letter-spacing:.02em}
+
+/* ---------- 03 便签 ---------- */
+textarea{
+  width:100%;min-height:120px;resize:vertical;font:400 14.5px/1.7 var(--f-mono);color:var(--ink);
+  background:var(--paper);border:1px solid var(--line-2);border-radius:0;padding:13px 14px;outline:none;
+  transition:border-color var(--t-fast),background var(--t-fast);
+}
+textarea:focus{border-color:var(--red);background:#fff}
+.bar-row{display:flex;gap:var(--s2);align-items:center;margin-top:var(--s3);flex-wrap:wrap}
+.bar-row .info{color:var(--ink-3);font:500 11.5px/1.5 var(--f-mono);flex:1;min-width:170px}
+
+/* ---------- 04 网页中转 ---------- */
+.urlrow{display:flex;gap:0}
+.urlrow input{
+  flex:1;min-width:0;font:400 14.5px/1.4 var(--f-mono);color:var(--ink);background:var(--paper);
+  border:1px solid var(--line-2);border-right:none;border-radius:0;padding:12px 14px;outline:none;
+  transition:border-color var(--t-fast),background var(--t-fast);
+}
+.urlrow input:focus{border-color:var(--red);background:#fff}
+.urlrow .btn{border-radius:0;padding:12px 22px}
+.urlrow .btn:hover{transform:none}
+.chips{display:flex;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s3)}
+.chip-link{font:500 12px/1 var(--f-mono);color:var(--ink-2);border:1px dashed var(--line-2);
+  padding:7px 11px;cursor:pointer;background:none;transition:border-color var(--t-fast),color var(--t-fast)}
+.chip-link:hover{border-color:var(--red);color:var(--red);border-style:solid}
+.sec-note{margin-top:var(--s3);font:500 11.5px/1.8 var(--f-sans);color:var(--ink-3);
+  border-left:3px solid var(--line-2);padding-left:11px}
+
+/* ---------- 05 聊天 ---------- */
+#chatMsgs{
+  max-height:340px;min-height:140px;overflow-y:auto;background:var(--paper);
+  border:1px solid var(--line);padding:var(--s3);display:flex;flex-direction:column;gap:var(--s2);
+}
+.cm{max-width:84%;align-self:flex-start;background:var(--panel);border:1px solid var(--line);
+  padding:8px 12px;word-break:break-word;white-space:pre-wrap;font-size:14px;
+  border-left:3px solid var(--line-2)}
+.cm .who{font:700 11px/1 var(--f-mono);letter-spacing:.08em;color:var(--ink-2);margin-bottom:4px;text-transform:uppercase}
+.cm .tm{font:500 10.5px/1 var(--f-mono);color:var(--ink-3);margin-top:4px;text-align:right}
+.cm.me{align-self:flex-end;border-left:3px solid var(--red);background:var(--red-soft);border-color:#eccfc5}
+.cm.me .who{color:var(--red-dark)}
+.cm.sys{align-self:center;background:none;border:none;color:var(--ink-3);font:500 11.5px/1 var(--f-mono);padding:3px;letter-spacing:.05em}
+.chatrow{display:flex;gap:var(--s2);margin-top:var(--s3);align-items:stretch}
+.chatrow input{
+  flex:1;min-width:0;font:400 14.5px/1.4 var(--f-sans);color:var(--ink);background:var(--paper);
+  border:1px solid var(--line-2);border-radius:0;padding:12px 14px;outline:none;
+  transition:border-color var(--t-fast),background var(--t-fast);
+}
+.chatrow input:focus{border-color:var(--red);background:#fff}
+.chatrow input.nick{flex:none;width:120px;font-family:var(--f-mono);font-size:13.5px}
+.presence{display:flex;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s3);
+  font:500 11.5px/1 var(--f-mono);color:var(--ink-2);align-items:center}
+.pill{border:1px solid var(--line-2);background:var(--paper);padding:5px 8px;letter-spacing:.04em}
+.pill .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--line-3);margin-right:6px}
+.pill .dot.on{background:var(--ok)}
+.st{display:inline-flex;align-items:center;gap:6px;font:500 11.5px/1 var(--f-mono);color:var(--ink-3)}
+.st .dot{width:7px;height:7px;border-radius:50%;background:var(--bad)}
+.st.on .dot{background:var(--ok)}
+
+/* ---------- 底栏 ---------- */
+footer{color:var(--ink-3);font:500 11.5px/2 var(--f-mono);letter-spacing:.04em;text-align:left;
+  border-top:1px solid var(--line-2);padding-top:var(--s4);margin-top:var(--s6)}
+
+/* ---------- 灯箱(图片大图) ---------- */
+.ov{position:fixed;inset:0;z-index:90;background:rgba(10,9,7,.93);display:none;
+  align-items:center;justify-content:center;flex-direction:column;padding:var(--s5)}
+.ov.on{display:flex;animation:fadeIn var(--t-mid) var(--ease) both}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.ov .cap{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:var(--s3);
+  padding:var(--s3) var(--s4);color:#e8e6e0;font:500 12.5px/1 var(--f-mono);letter-spacing:.05em}
+.ov .cap .sp{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ov .cap button{font:600 12px/1 var(--f-sans);color:#e8e6e0;background:none;border:1px solid #55524a;
+  padding:7px 13px;cursor:pointer;transition:border-color var(--t-fast),color var(--t-fast)}
+.ov .cap button:hover{border-color:var(--red);color:#ff9b7d}
+.ov img{max-width:94vw;max-height:84vh;object-fit:contain;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.ov iframe{width:94vw;height:86vh;border:none;background:#fff}
+.ov .txt{width:min(760px,94vw);height:78vh;overflow:auto;background:#fff;padding:26px 30px;
+  white-space:pre-wrap;word-break:break-word;font:400 15px/1.85 var(--f-mono);color:var(--ink)}
+.ov .load{color:#c9c6bd;font:500 13px/1 var(--f-mono);letter-spacing:.1em}
+
+/* ---------- 下载进度面板 ---------- */
+.dlpanel{position:fixed;right:14px;bottom:14px;z-index:80;width:min(340px,92vw);
+  background:var(--panel);border:1px solid var(--ink);border-top:4px solid var(--red);
+  box-shadow:0 12px 40px rgba(18,16,13,.22);display:none}
+.dlpanel.on{display:block;animation:slideUp var(--t-mid) var(--ease) both}
+@keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.dlpanel .hd{display:flex;align-items:center;gap:var(--s2);padding:9px 13px;border-bottom:1px solid var(--line);
+  font:700 11px/1 var(--f-sans);letter-spacing:.14em;text-transform:uppercase}
+.dlpanel .hd .sp{flex:1}
+.dlpanel .hd button{border:none;background:none;font:700 15px/1 var(--f-sans);color:var(--ink-3);cursor:pointer;padding:2px 6px}
+.dlpanel .hd button:hover{color:var(--ink)}
+.dlrow{padding:10px 13px;border-bottom:1px solid var(--line)}
+.dlrow:last-child{border-bottom:none}
+.dlrow .nm{font:600 13px/1.4 var(--f-sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dlrow .meta{display:flex;gap:var(--s2);align-items:center;margin-top:6px}
+.dlrow .trk{flex:1;height:5px;background:var(--line);overflow:hidden}
+.dlrow .trk i{display:block;height:100%;width:0;background:var(--red);transition:width .3s var(--ease)}
+.dlrow .pct{font:500 11px/1 var(--f-mono);color:var(--ink-2);width:118px;text-align:right;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.dlrow.ok .trk i{background:var(--ok)} .dlrow.ok .pct{color:var(--ok)}
+.dlrow.err .trk i{background:var(--bad)} .dlrow.err .pct{color:var(--bad)}
+
+/* ---------- Toast ---------- */
+#toast{
+  position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(70px);opacity:0;
+  background:var(--ink);color:#f5f4f0;padding:12px 20px;font:600 13.5px/1.4 var(--f-sans);
+  letter-spacing:.03em;transition:transform var(--t-mid) var(--ease),opacity var(--t-mid) var(--ease);
+  z-index:95;max-width:88vw;border-left:4px solid var(--red);box-shadow:0 10px 30px rgba(0,0,0,.3)}
+#toast.show{transform:translateX(-50%);opacity:1}
+
+/* ---------- 响应式 ---------- */
+@media (max-width:768px){
+  .wrap{padding:0 var(--s3) 70px}
+  .sec-hd{padding:var(--s3) var(--s4)} .sec-bd{padding:var(--s4)}
+  .frow{padding:12px var(--s4);flex-wrap:wrap}
+  .facts{width:100%;justify-content:flex-start}
+  .dtrack{width:110px} .dpct{width:96px;font-size:11px}
+  .chatrow{flex-wrap:wrap}
+  .chatrow input.nick{width:100%;order:-1}
+}
+@media (max-width:380px){
+  .masthead h1{font-size:26px}
+  .dtrack{display:none}
+  .fext{min-width:44px}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+  html{scroll-behavior:auto}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- 顶栏 -->
+  <div class="topbar">
+    <span class="glyph" aria-hidden="true">TR</span>
+    <span class="word">LAN Relay Station</span>
+    <span class="sp"></span>
+    <span class="chip admin" id="adminBadge" style="display:none">管理员</span>
+    <span class="chip" id="userChip" style="display:none">
+      <b id="userName"></b>
+      <button class="chip-btn" id="logoutBtn" style="border:none;background:none;padding:0;font-size:12px;color:var(--red);cursor:pointer">退出</button>
+    </span>
+    <a class="chip chip-btn" href="/" style="border-bottom-width:1px;color:var(--ink-2)">门户</a>
+  </div>
+
+  <!-- 刊头 -->
+  <div class="masthead">
+    <h1>局域网<em>中继站</em></h1>
+    <div class="kicker">
+      <span>NODE <b>iflytek.com</b></span>
+      <span>FILE <b>TRANSIT</b></span>
+      <span>CHAT <b>ROOM</b></span>
+      <span>WEB <b>RELAY</b></span>
+      <span>NOTE <b>PAD</b></span>
+    </div>
+  </div>
+
+  <!-- 01 上传 -->
+  <section class="sec">
+    <div class="sec-hd">
+      <span class="sec-no">01</span><h2>上传投递</h2>
+      <span class="n" id="dropCap"></span>
+      <span class="sp"></span>
+      <button class="btn sm ghost" id="pickBtn" type="button">选择文件</button>
+    </div>
+    <div class="sec-bd">
+      <div id="drop">
+        <b>拖入文件或文件夹,投递到中继</b>
+        <span class="hint" id="dropHint">CLICK / DROP · 断网可续 · 全网可见</span>
+      </div>
+      <input type="file" id="fileInput" multiple>
+      <div id="prog"></div>
+    </div>
+  </section>
+
+  <!-- 02 文件 -->
+  <section class="sec">
+    <div class="sec-hd">
+      <span class="sec-no">02</span><h2>中继文件</h2>
+      <span class="n" id="count"></span>
+      <span class="sp"></span>
+      <button class="btn sm" id="dirBtn" type="button" title="下载直接写入你选的本地文件夹">下载到:未指定</button>
+      <button class="btn sm" id="refreshBtn" type="button">刷新</button>
+    </div>
+    <div id="files"><div class="empty">装载中…</div></div>
+  </section>
+
+  <!-- 03 便签 -->
+  <section class="sec">
+    <div class="sec-hd">
+      <span class="sec-no">03</span><h2>文字便签</h2>
+      <span class="n">跨设备传递:链接、代码、口令</span>
+    </div>
+    <div class="sec-bd">
+      <textarea id="noteText" placeholder="在此输入或粘贴文本,点「发送」,其它设备打开本页即可看到并复制"></textarea>
+      <div class="bar-row">
+        <button class="btn pri" id="noteSend" type="button">发送便签</button>
+        <button class="btn" id="noteCopy" type="button">复制内容</button>
+        <button class="btn" id="noteClear" type="button">清空</button>
+        <span class="info" id="noteInfo"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 网页中转 -->
+  <section class="sec">
+    <div class="sec-hd">
+      <span class="sec-no">04</span><h2>网页中转</h2>
+      <span class="n">浏览器工具条 · 逐页点入 · 支持内网设备页</span>
+    </div>
+    <div class="sec-bd">
+      <div class="urlrow">
+        <input id="webUrl" placeholder="https://example.com 或 192.168.1.1" spellcheck="false" autocomplete="off">
+        <button class="btn pri" id="webGo" type="button">前往</button>
+      </div>
+      <div class="chips">
+        <button class="chip-link" data-url="https://www.baidu.com">百度</button>
+        <button class="chip-link" data-url="http://192.168.1.1">光猫 192.168.1.1</button>
+        <button class="chip-link" data-url="https://news.ycombinator.com">Hacker News</button>
+        <button class="chip-link" data-url="https://www.qq.com">腾讯</button>
+      </div>
+      <div class="sec-note">
+        中转页顶部有 <b>← 后退 / ↻ 刷新 / 🏠 中继站 / 地址栏</b>;静态资源已缓存提速,
+        伪装成常规浏览器 UA,减少被站点拦截。
+      </div>
+    </div>
+  </section>
+
+  <!-- 05 聊天 -->
+  <section class="sec">
+    <div class="sec-hd">
+      <span class="sec-no">05</span><h2>局域网聊天</h2>
+      <span class="n" id="chatOn"></span>
+      <span class="sp"></span>
+      <span class="st" id="chatStWrap"><span class="dot"></span><span id="chatSt">连接中…</span></span>
+      <button class="btn sm danger" id="chatClear" style="display:none" type="button">清空记录</button>
+    </div>
+    <div class="sec-bd">
+      <div id="chatMsgs"><div class="empty">装载中…</div></div>
+      <div class="chatrow">
+        <input class="nick" id="chatName" placeholder="昵称" maxlength="16">
+        <input id="chatInput" placeholder="输入消息,回车发送" autocomplete="off">
+        <button class="btn pri" id="chatSend" type="button">发送</button>
+      </div>
+      <div class="presence" id="chatOnline"></div>
+    </div>
+  </section>
+
+  <footer>
+    本页由 <b>iflytek.com</b> 内网 DNS Sinkhole 中继提供 · 文件落在服务器本机<br>
+    文件对同网所有设备可见,勿放敏感资料 · 多余文件请及时删除
+  </footer>
+</div>
+
+<!-- 图片大图灯箱 -->
+<div class="ov" id="lightbox" role="dialog" aria-modal="true" aria-label="图片预览">
+  <div class="cap">
+    <span class="sp" id="lbName"></span>
+    <button id="lbDl" type="button">下载</button>
+    <button id="lbClose" type="button">关闭 ESC</button>
+  </div>
+  <img id="lbImg" alt="">
+</div>
+
+<!-- 文档/电子书/PDF 预览 -->
+<div class="ov" id="docOv" role="dialog" aria-modal="true" aria-label="文档预览">
+  <div class="cap">
+    <span class="sp" id="dvName"></span>
+    <button id="dvDl" type="button">下载</button>
+    <button id="dvClose" type="button">关闭 ESC</button>
+  </div>
+  <iframe id="dvFrame" title="文档内容"></iframe>
+  <pre class="txt" id="dvText" style="display:none"></pre>
+  <div class="load" id="dvLoad" style="display:none">LOADING…</div>
+</div>
+
+<!-- 下载进度面板 -->
+<div class="dlpanel" id="dlpanel" aria-live="polite">
+  <div class="hd">DOWNLOAD<span class="sp"></span><button id="dlClose" type="button" aria-label="收起">×</button></div>
+  <div id="dlList"></div>
+</div>
+
+<div id="toast" role="status"></div>
+
+<script>
+(function(){
+'use strict';
+const $=id=>document.getElementById(id);
+const prog=$('prog'), filesEl=$('files'), countEl=$('count');
+let info={maxUploadMB:2048, admin:false};
+
+/* ============ /api/info ============ */
+fetch('/api/info').then(r=>r.json()).then(d=>{
+  info=d;
+  $('dropCap').textContent='单文件上限 '+d.maxUploadMB+' MB';
+  if(d.admin){ $('adminBadge').style.display=''; $('chatClear').style.display=''; }
+  if(d.auth&&d.auth.user){ $('userChip').style.display='inline-flex';
+    $('userName').textContent=d.auth.user+(d.auth.role==='admin'?' · 管理员':''); }
+}).catch(()=>{});
+$('logoutBtn').onclick=()=>{ location.href='/auth/logout'; };
+
+/* ============ 工具 ============ */
+function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show');
+  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),2600); }
+function fmtSize(n){ if(n<1024)return n+' B'; const u=['KB','MB','GB','TB']; let i=-1;
+  do{n/=1024;i++}while(n>=1024&&i<u.length-1); return (n<10?n.toFixed(1):Math.round(n))+' '+u[i]; }
+function fmtTime(ts){ const d=new Date(ts), p=x=>String(x).padStart(2,'0');
+  return (d.getMonth()+1)+'月'+d.getDate()+'日 '+p(d.getHours())+':'+p(d.getMinutes()); }
+function copyText(txt){
+  if(navigator.clipboard&&window.isSecureContext){ return navigator.clipboard.writeText(txt).then(()=>toast('已复制')).catch(fallback); }
+  return fallback();
+  function fallback(){ const ta=document.createElement('textarea'); ta.value=txt; ta.style.cssText='position:fixed;opacity:0';
+    document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); toast('已复制'); }
+    catch(e){ toast('复制失败,请手动选择'); } ta.remove(); } }
+function extOf(n){ return (n.split('.').pop()||'').toLowerCase(); }
+function extClass(n){ const e=extOf(n);
+  if(/^(png|jpe?g|gif|webp|bmp|svg|heic)$/.test(e))return 'img';
+  if(/^(mp4|mov|avi|mkv|webm|flv|mp3|wav|flac|aac|ogg|m4a)$/.test(e))return 'vid';
+  if(/^(docx?|xlsx?|pptx?|pdf|txt|md|log|csv|json|html|htm|epub|mobi|azw3)$/.test(e))return 'doc';
+  return ''; }
+function extLabel(n){ const e=extOf(n); return e.length>6?e.slice(0,6):e; }
+
+/* ============ 目录下载(File System Access) ============ */
+let dirHandle=null, dirName='';
+async function idbGet(k){ return new Promise(res=>{ try{
+  const rq=indexedDB.open('relay-dl',1);
+  rq.onupgradeneeded=()=>rq.result.createObjectStore('kv');
+  rq.onsuccess=()=>{ const db=rq.result, tx=db.transaction('kv','readonly').get(k);
+    tx.onsuccess=()=>{ res(tx.result||null); db.close(); }; tx.onerror=()=>{ res(null); db.close(); }; };
+  rq.onerror=()=>res(null);
+}catch(e){ res(null); } }); }
+async function idbPut(k,v){ return new Promise(res=>{ try{
+  const rq=indexedDB.open('relay-dl',1);
+  rq.onupgradeneeded=()=>rq.result.createObjectStore('kv');
+  rq.onsuccess=()=>{ const db=rq.result, tx=db.transaction('kv','readwrite').put(v,k);
+    tx.onsuccess=()=>{ res(); db.close(); }; tx.onerror=()=>{ res(); db.close(); }; };
+  rq.onerror=()=>res();
+}catch(e){ res(); } }); }
+function canUseDir(){ return typeof window.showDirectoryPicker==='function'; }
+function renderDirBtn(){
+  const b=$('dirBtn');
+  if(!canUseDir()){ b.style.display='none'; return; }
+  b.textContent='下载到:'+(dirName||'未指定');
+  b.classList.toggle('on',!!dirName);
+}
+async function pickDir(){
+  try{
+    const h=await window.showDirectoryPicker({ id:'relay-dl', mode:'readwrite' });
+    dirHandle=h; dirName=h.name;
+    await idbPut('dir',h);
+    renderDirBtn(); toast('下载目录已设为「'+dirName+'」');
+  }catch(e){ /* 用户取消:忽略 */ }
+}
+$('dirBtn').onclick=pickDir;
+(async()=>{ if(canUseDir()){ const h=await idbGet('dir');
+  if(h){ try{ const p=h.requestPermission&&await h.requestPermission('readwrite');
+    if(p==='granted'||!h.requestPermission){ dirHandle=h; dirName=h.name; } }
+    catch(e){ dirHandle=null; dirName=''; } } renderDirBtn(); } })();
+
+/* ============ 下载进度面板 ============ */
+const dlPanel=$('dlpanel'), dlList=$('dlList');
+let dlMin=false;
+$('dlClose').onclick=()=>{ dlPanel.classList.remove('on'); dlMin=true; };
+function dlRow(name){
+  dlPanel.classList.add('on'); dlMin=false;
+  const r=document.createElement('div'); r.className='dlrow';
+  const nm=document.createElement('div'); nm.className='nm'; nm.textContent=name;
+  const meta=document.createElement('div'); meta.className='meta';
+  const trk=document.createElement('div'); trk.className='trk';
+  const fill=document.createElement('i'); trk.appendChild(fill);
+  const pct=document.createElement('span'); pct.className='pct'; pct.textContent='0%';
+  meta.append(trk,pct); r.append(nm,meta); dlList.prepend(r);
+  while(dlList.children.length>6) dlList.lastChild.remove();
+  return { row:r, fill, pct, done(t){ this.row.classList.add('ok'); fill.style.width='100%'; pct.textContent=t||'完成'; },
+    fail(t){ this.row.classList.add('err'); pct.textContent=t||'失败'; } };
+}
+async function writeDir(root, name, blob){
+  const fh=await root.getFileHandle(name,{create:true});
+  const w=await fh.createWritable();
+  await w.write(blob); await w.close();
+}
+async function dlFile(f){
+  const p=dlRow(f.name);
+  try{
+    const r=await fetch('/f/'+f.id);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const total=+(r.headers.get('content-length')||0)||f.size;
+    const reader=r.body.getReader();
+    const chunks=[]; let got=0; const t0=Date.now();
+    for(;;){
+      const {done,value}=await reader.read(); if(done)break;
+      chunks.push(value); got+=value.length;
+      if(total){
+        const sec=(Date.now()-t0)/1000, sp=got/Math.max(sec,0.3);
+        p.fill.style.width=(got/total*100).toFixed(1)+'%';
+        p.pct.textContent=(got/total*100).toFixed(0)+'% · '+fmtSize(sp)+'/s';
+      }
+    }
+    const blob=new Blob(chunks);
+    if(dirHandle){
+      try{
+        let fh=dirHandle;
+        const pr=fh.requestPermission&&await fh.requestPermission('readwrite');
+        if(pr==='denied') throw new Error('目录权限已收回');
+        await writeDir(dirHandle,f.name,blob);
+        p.done('已存入 '+dirName);
+        toast('已下载到「'+dirName+'」:'+f.name);
+      }catch(e){
+        // 目录失败(权限过期/配额)→ 回退浏览器下载
+        const u=URL.createObjectURL(blob); const a=document.createElement('a');
+        a.href=u; a.download=f.name; a.click(); setTimeout(()=>URL.revokeObjectURL(u),30000);
+        p.done('已下载');
+      }
+    }else{
+      const u=URL.createObjectURL(blob); const a=document.createElement('a');
+      a.href=u; a.download=f.name; a.click(); setTimeout(()=>URL.revokeObjectURL(u),30000);
+      p.done('已下载');
+    }
+  }catch(e){ p.fail('失败:'+(e&&e.message||e)); toast('下载失败,可重试'); }
+}
+
+/* ============ 01 上传(断点续传) ============ */
+function uploadOne(file){
+  return new Promise(async resolve=>{
+    const row=document.createElement('div'); row.className='drow';
+    const nm=document.createElement('span'); nm.className='nm'; nm.textContent=file.name;
+    const trk=document.createElement('div'); trk.className='dtrack';
+    const fill=document.createElement('i'); trk.appendChild(fill);
+    const pct=document.createElement('span'); pct.className='dpct'; pct.textContent='0%';
+    row.append(nm,trk,pct); prog.appendChild(row);
+    const key=await fileKey(file);
+    let offset=0;
+    try{ const r=await fetch('/api/upload/status?key='+key); if(r.ok){ const j=await r.json(); offset=j.offset||0; } }catch(e){}
+    if(offset>=file.size&&file.size>0){ row.classList.add('ok'); fill.style.width='100%'; pct.textContent='已完成'; setTimeout(()=>row.remove(),2500); resolve(true); return; }
+    const blob=offset?file.slice(offset):file;
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST','/api/upload');
+    xhr.setRequestHeader('x-file-name',encodeURIComponent(file.name));
+    xhr.setRequestHeader('x-upload-key',key);
+    xhr.setRequestHeader('x-upload-offset',String(offset));
+    const t0=Date.now();
+    xhr.upload.onprogress=e=>{ if(!e.lengthComputable)return;
+      const sec=(Date.now()-t0)/1000, sp=e.loaded/Math.max(sec,0.3);
+      const done=offset+e.loaded, total=file.size||e.total;
+      fill.style.width=(done/total*100).toFixed(1)+'%';
+      pct.textContent=(done/total*100).toFixed(0)+'% · '+fmtSize(sp)+'/s'+(offset?' 续传':''); };
+    xhr.onload=()=>{ let j=null; try{ j=JSON.parse(xhr.responseText); }catch(e){}
+      if(xhr.status===200&&j&&j.ok){ row.classList.add('ok'); fill.style.width='100%'; pct.textContent='完成';
+        setTimeout(()=>row.remove(),4000); resolve(true); }
+      else{ row.classList.add('err'); pct.textContent=(j&&j.error)||('失败 '+xhr.status); resolve(false); } };
+    xhr.onerror=()=>{ row.classList.add('err'); pct.textContent='网络中断(可重试,已留断点)'; resolve(false); };
+    xhr.send(blob);
+  });
+}
+async function fileKey(file){
+  try{
+    const buf=await file.slice(0,1024*1024).arrayBuffer();
+    const h=await crypto.subtle.digest('SHA-256',buf);
+    const d=Array.from(new Uint8Array(h)).slice(0,8).map(x=>x.toString(16).padStart(2,'0')).join('');
+    return d+file.size.toString(16).padStart(8,'0');
+  }catch(e){ return Math.random().toString(16).slice(2,30); }
+}
+async function handleFiles(list){
+  const arr=[...(list||[])]; if(!arr.length)return;
+  for(const f of arr){
+    if(info.maxUploadMB&&f.size>info.maxUploadMB*1048576){ toast('「'+f.name+'」超过 '+info.maxUploadMB+'MB,跳过'); continue; }
+    await uploadOne(f);
+  }
+  loadFiles();
+}
+const drop=$('drop');
+drop.onclick=()=>$('fileInput').click();
+$('pickBtn').onclick=()=>$('fileInput').click();
+$('fileInput').onchange=e=>{ handleFiles(e.target.files); e.target.value=''; };
+['dragenter','dragover'].forEach(ev=>document.addEventListener(ev,e=>{ e.preventDefault(); drop.classList.add('hov'); },false));
+['dragleave','drop'].forEach(ev=>document.addEventListener(ev,e=>{ e.preventDefault();
+  if(ev==='dragleave'&&e.relatedTarget)return; drop.classList.remove('hov'); },false));
+function readAllDir(rd){ return new Promise((res,rej)=>{ const acc=[]; (function next(){ rd.readEntries(es=>{ if(!es.length){ res(acc); return; } acc.push(...es); next(); }, rej); })(); }); }
+async function walkEntry(entry, out){
+  if(entry.isFile){ const f=await new Promise(r=>entry.file(r,()=>r(null))); if(f) out.push(f); }
+  else if(entry.isDirectory){ const es=await readAllDir(entry.createReader());
+    for(const e2 of es) await walkEntry(e2,out); }
+}
+async function collectDrop(dt){
+  const out=[];
+  if(dt&&dt.items&&dt.items.length&&dt.items[0].webkitGetAsEntry){
+    const ens=[]; for(const it of dt.items){ const en=it.webkitGetAsEntry&&it.webkitGetAsEntry(); if(en) ens.push(en); }
+    if(ens.length){ for(const en of ens) await walkEntry(en,out); return out; }
+  }
+  return [...((dt&&dt.files)||[])];
+}
+document.addEventListener('drop',e=>{ e.preventDefault();
+  collectDrop(e.dataTransfer).then(handleFiles).catch(()=>{}); },false);
+
+/* ============ 02 文件列表 ============ */
+function dlUrl(f){ return location.origin+'/f/'+f.id+'?dl='+encodeURIComponent(f.name); }
+function openPreview(f){
+  const pv=f.pv; if(!pv)return;
+  if(pv.kind==='image'){ showLightbox(f); return; }
+  if(pv.kind==='text'){ showText(f); return; }
+  showDoc(f); // pdf / epub 走 iframe
+}
+function showLightbox(f){
+  $('lbName').textContent=f.name+' · '+fmtSize(f.size);
+  $('lbDl').onclick=()=>dlFile(f);
+  const img=$('lbImg'); img.src='/f/'+f.id+'?inline=1'; img.alt=f.name;
+  $('lightbox').classList.add('on');
+}
+function showDoc(f){
+  $('dvName').textContent=f.name;
+  $('dvDl').onclick=()=>dlFile(f);
+  $('dvFrame').style.display='none'; $('dvText').style.display='none'; $('dvLoad').style.display='';
+  $('docOv').classList.add('on');
+  const pv=f.pv;
+  if(pv.kind==='epub'){
+    $('dvFrame').style.display=''; $('dvLoad').style.display='none';
+    $('dvFrame').src=pv.url;
+    return;
+  }
+  if(pv.kind==='pdf'){
+    $('dvFrame').style.display=''; $('dvLoad').style.display='none';
+    $('dvFrame').src=pv.url;
+    return;
+  }
+  // 文本类:fetch 后 <pre> 渲染
+  fetch(pv.url).then(r=>{ if(!r.ok)throw new Error('HTTP '+r.status); return r.text(); })
+    .then(t=>{ $('dvLoad').style.display='none'; $('dvText').style.display=''; $('dvText').textContent=t; })
+    .catch(e=>{ $('dvLoad').style.display='none'; $('dvText').style.display=''; $('dvText').textContent='读取失败:'+(e&&e.message||e); });
+}
+$('lbClose').onclick=()=>$('lightbox').classList.remove('on');
+$('dvClose').onclick=()=>$('docOv').classList.remove('on');
+$('lightbox').onclick=e=>{ if(e.target===$('lightbox'))$('lightbox').classList.remove('on'); };
+$('docOv').onclick=e=>{ if(e.target===$('docOv'))$('docOv').classList.remove('on'); };
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ $('lightbox').classList.remove('on'); $('docOv').classList.remove('on'); } });
+
+function makeRow(f){
+  const row=document.createElement('div'); row.className='frow';
+  const ext=document.createElement('span'); ext.className='fext '+extClass(f.name); ext.textContent=extLabel(f.name);
+  ext.title=f.name;
+  const meta=document.createElement('div'); meta.className='fmeta';
+  const nm=document.createElement('div'); nm.className='fname'; nm.textContent=f.name;
+  const de=document.createElement('div'); de.className='fdesc';
+  de.textContent=fmtSize(f.size)+' · '+fmtTime(f.uploadedAt)+' · 来自 '+(f.by||'?');
+  meta.append(nm,de);
+  const acts=document.createElement('div'); acts.className='facts';
+  if(f.pv){
+    const v=document.createElement('button'); v.className='btn sm'; v.type='button';
+    v.textContent=(f.pv.kind==='image'?'看图':f.pv.kind==='pdf'?'预览':f.pv.kind==='epub'?'读书':'查看');
+    v.onclick=()=>openPreview(f); acts.append(v);
+  }
+  const d=document.createElement('button'); d.className='btn sm'; d.type='button'; d.textContent='下载';
+  d.onclick=()=>dlFile(f); acts.append(d);
+  const cp=document.createElement('button'); cp.className='btn sm'; cp.type='button'; cp.textContent='复制链接';
+  cp.onclick=()=>copyText(dlUrl(f)); acts.append(cp);
+  if(info.admin){
+    const del=document.createElement('button'); del.className='btn sm danger'; del.type='button'; del.textContent='删除';
+    del.onclick=()=>{ if(!confirm('删除「'+f.name+'」?'))return;
+      fetch('/api/files/'+f.id,{method:'DELETE'}).then(r=>r.json()).then(j=>{ toast(j.ok?'已删除':(j.error||'删除失败')); loadFiles(); }); };
+    acts.append(del);
+  }
+  row.append(ext,meta,acts);
+  return row;
+}
+let lastJson='';
+function loadFiles(){
+  fetch('/api/files').then(r=>r.json()).then(list=>{
+    const j=JSON.stringify(list); if(j===lastJson)return; lastJson=j;
+    const totalB=list.reduce((s,f)=>s+f.size,0);
+    countEl.textContent=list.length?('共 '+list.length+' 项 · '+fmtSize(totalB)):'';
+    filesEl.innerHTML='';
+    if(!list.length){ const e=document.createElement('div'); e.className='empty';
+      e.textContent='暂无文件 —— 拖入即可投递,全网设备可取'; filesEl.appendChild(e); return; }
+    list.forEach(f=>filesEl.appendChild(makeRow(f)));
+  }).catch(()=>{});
+}
+$('refreshBtn').onclick=loadFiles;
+loadFiles(); setInterval(loadFiles,5000);
+
+/* ============ 03 便签 ============ */
+let noteDirty=false;
+function loadNote(force){
+  if(!force&&document.activeElement===$('noteText')&&!noteDirty)return;
+  fetch('/api/note').then(r=>r.json()).then(n=>{
+    if(force||!noteDirty) $('noteText').value=n.text||'';
+    $('noteInfo').textContent=n.updatedAt?('最近更新 '+fmtTime(n.updatedAt)+' · 来自 '+n.updatedBy):'尚无便签';
+  }).catch(()=>{});
+}
+$('noteText').addEventListener('input',()=>{ noteDirty=true; });
+$('noteSend').onclick=()=>{
+  const v=$('noteText').value;
+  fetch('/api/note',{method:'PUT',body:v}).then(r=>r.json()).then(n=>{
+    if(n.ok!==undefined){ noteDirty=false; loadNote(true); toast(n.text?'便签已发送':'便签已清空'); }
+  }).catch(()=>toast('发送失败'));
+};
+$('noteCopy').onclick=()=>{ const v=$('noteText').value; if(!v)return toast('没有内容'); copyText(v); };
+$('noteClear').onclick=()=>{ $('noteText').value=''; noteDirty=true; };
+loadNote(true); setInterval(()=>loadNote(false),6000);
+
+/* ============ 04 网页中转 ============ */
+function webGo(){
+  let v=$('webUrl').value.trim(); if(!v)return;
+  if(!/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) v=(v.includes('/')||v.includes('.'))?'http://'+v:'https://www.bing.com/search?q='+encodeURIComponent(v);
+  location.href='/p/'+encodeURIComponent(v);
+}
+$('webGo').onclick=webGo;
+$('webUrl').addEventListener('keydown',e=>{ if(e.key==='Enter')webGo(); });
+document.querySelectorAll('.chip-link[data-url]').forEach(b=>{
+  b.onclick=()=>{ $('webUrl').value=b.dataset.url; webGo(); };
+});
+
+/* ============ 05 聊天(WebSocket + 自动重连) ============ */
+const chatEl=$('chatMsgs'), chatInput=$('chatInput'), chatName=$('chatName');
+let ws=null, wsRetry=0, connected=false, chatEmpty=true;
+chatName.value=localStorage.getItem('relay-nick')||'';
+function setSt(on,txt){
+  const w=$('chatStWrap'); w.classList.toggle('on',on);
+  $('chatSt').textContent=txt;
+}
+function atBottom(){ return chatEl.scrollHeight-chatEl.scrollTop-chatEl.clientHeight<60; }
+function toBottom(){ chatEl.scrollTop=chatEl.scrollHeight; }
+function appendMsg(m){
+  if(chatEmpty){ chatEl.innerHTML=''; chatEmpty=false; }
+  const d=document.createElement('div');
+  if(m.sys){ d.className='cm sys'; d.textContent=m.text; }
+  else{
+    d.className='cm'+(m.from===chatName.value?' me':'');
+    const who=document.createElement('div'); who.className='who'; who.textContent=m.from;
+    const tx=document.createElement('div'); tx.textContent=m.text;
+    const tm=document.createElement('div'); tm.className='tm'; tm.textContent=fmtTime(m.ts);
+    d.append(who,tx,tm);
+  }
+  chatEl.appendChild(d);
+  while(chatEl.children.length>400) chatEl.firstChild.remove();
+}
+function setOnline(list){
+  $('chatOn').textContent=list.length?('在线 '+list.length):'';
+  const el=$('chatOnline'); el.innerHTML='';
+  list.forEach(c=>{
+    const s=document.createElement('span'); s.className='pill';
+    const dt=document.createElement('span'); dt.className='dot on';
+    s.append(dt,document.createTextNode(c.name+' · '+c.ip));
+    el.appendChild(s);
+  });
+}
+function chatConnect(){
+  const proto=location.protocol==='https:'?'wss:':'ws:';
+  try{ ws=new WebSocket(proto+'//'+location.host+'/ws/chat?name='+encodeURIComponent(chatName.value||'朋友')); }
+  catch(e){ setSt(false,'不支持 WebSocket'); return; }
+  ws.onopen=()=>{ connected=true; wsRetry=0; setSt(true,'已连接'); };
+  ws.onmessage=e=>{ let d; try{ d=JSON.parse(e.data); }catch(err){ return; }
+    if(d.type==='hello'){ chatEl.innerHTML=''; chatEmpty=false;
+      if(!d.hist.length){ chatEl.innerHTML='<div class="empty">还没有消息,发一条开场吧</div>'; chatEmpty=true; }
+      else d.hist.forEach(appendMsg);
+      toBottom(); setOnline(d.online);
+      if(!chatName.value){ chatName.value=d.name; } }
+    else if(d.type==='msg'){ const stick=atBottom(); appendMsg(d.msg); if(stick)toBottom(); }
+    else if(d.type==='presence'){ setOnline(d.online); }
+    else if(d.type==='clear'){ chatEl.innerHTML='<div class="empty">聊天记录已清空</div>'; chatEmpty=true; }
+  };
+  ws.onclose=()=>{ connected=false; setSt(false,'断开,重连中…');
+    setTimeout(chatConnect,Math.min(15000,1000*Math.pow(1.6,wsRetry++))); };
+  ws.onerror=()=>{ try{ ws.close(); }catch(e){} };
+}
+function chatSend(){
+  const t=chatInput.value.trim(); if(!t)return;
+  if(!connected||!ws||ws.readyState!==1){ toast('未连接,稍候自动重连'); return; }
+  ws.send(JSON.stringify({type:'msg',text:t}));
+  chatInput.value='';
+}
+$('chatSend').onclick=chatSend;
+chatInput.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); chatSend(); } });
+chatName.addEventListener('change',()=>{ localStorage.setItem('relay-nick',chatName.value.trim()); try{ ws&&ws.close(); }catch(e){} });
+$('chatClear').onclick=()=>{ if(!confirm('清空所有聊天记录(所有设备同步消失)?'))return;
+  fetch('/api/chat/clear',{method:'POST'}).then(r=>r.json()).then(j=>{ toast(j.ok?'聊天记录已清空':(j.error||'失败')); }).catch(()=>{}); };
+chatConnect();
+})();
+</script>
+</body>
+</html>

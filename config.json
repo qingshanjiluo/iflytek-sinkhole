@@ -1,0 +1,59 @@
+{
+  "sinkholeDomain": "iflytek.com",
+  "blockSubdomains": false,
+  "answerIP": "",
+  "answerBySource": {},
+  "dnsPort": 53,
+  "upstreamDNS": ["223.5.5.5:53", "119.29.29.29:53"],
+  "allowFromCIDR": [],
+  "sinkExtraDomains": [
+    "connectivitycheck.gstatic.com",
+    "www.google.com",
+    "connect.rom.miui.com",
+    "connectivitycheck.platform.hicloud.com",
+    "wifi.vivo.com.cn",
+    "connectivitycheck.oppomobile.com",
+    "www.msftconnecttest.com",
+    "dns.msftconnecttest.com",
+    "www.gstatic.cn"
+  ],
+  "httpPort": 80,
+  "httpsPort": 443,
+  "target": "http://127.0.0.1:28791",
+  "cert": {
+    "pfx": "certs/iflytek.pfx",
+    "passphrase": "sinkhole-local-2026"
+  },
+  "relay": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 28791,
+    "maxUploadMB": 2048,
+    "token": "",
+    "chat": { "enabled": true },
+    "proxy": { "enabled": true, "blockPrivate": false, "maxSizeMB": 20, "timeoutMs": 15000 },
+    "mirror": { "enabled": false, "url": "https://www.iflytek.com/index.html", "door": "/relay", "catchAll": true },
+    "dhcp": { "enabled": true, "gateway": "192.168.137.1", "mask": "255.255.255.0", "pool": "192.168.137.2-254", "leaseSec": 3600 },
+    "auth": {
+      "enabled": true,
+      "accounts": { "sifangzhiji": "Pipi20100817" },
+      "roles": { "sifangzhiji": "admin" }
+    }
+  },
+  "_说明": {
+    "sinkholeDomain": "拦截的目标域名(精确匹配)。换域名只改这里",
+    "blockSubdomains": "false=只拦本体域名;true=连 *.域名 一起拦",
+    "answerIP": "留空=全自动:按查询来源网段回本机对应接口 IP(换电脑/换网络免改)。也可手工指定",
+    "answerBySource": "可选的手工 网段→应答IP 映射(优先于自动),一般留空即可",
+    "allowFromCIDR": "留空=自动放行本机所有网卡网段(含移动热点);填了则以配置为准",
+    "sinkExtraDomains": "额外劫持的域名列表(联网检测域名→本机 /generate_204 返回204,让设备显示'已连接'而非'无法访问互联网');通用模式 *.前缀=拦整个子域",
+    "target": "拦截后展示的站点。默认内置中继站(文件互传+聊天+网页转发),端口被占会自动避让并跟随",
+    "upstreamDNS": "非拦截域名的查询将原样转发给这些上游 DNS",
+    "relay.chat": "局域网聊天室开关(WebSocket /ws/chat,历史存 storage/chat.json)",
+    "relay.proxy": "网页转发浏览开关:/p/<网址>;blockPrivate=true 时禁止转发到内网地址;上限 maxSizeMB",
+    "relay.mirror": "伪装门户:enabled 后访问 / 实时镜像 url(原站);点 logo/首页链接进暗门 door(/relay=真中继站);catchAll=深链兜底镜像;关闭则 / 直接是中继站",
+    "relay.dhcp": "内置 DHCP 服务器(替代坏死的 ICS):给连热点的设备分配 137.x IP,gateway=热点网卡本机 IP,pool=分配池,leaseSec=租期秒。设备拿到 IP 后 DNS 也指向本机,直接访问 http://iflytek.com 即可",
+    "relay.auth": "账号登录:accounts=账号:密码 明文表;roles=账号:角色(admin=管理员,删文件/清聊天,未列=普通用户)。enabled=false 关闭登录(局域网免登录)。账号明文存本地,换机部署后立即改密码!",
+    "换电脑部署": "整个文件夹拷过去 → 管理员 PowerShell 里运行 .\\setup-on-this-pc.ps1 一条命令完成(证书/防火墙/开机自启/启动)"
+  }
+}

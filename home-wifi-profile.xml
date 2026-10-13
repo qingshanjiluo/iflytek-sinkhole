@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<WLANProfile xmlns="http://www.microsoft.com/networking/WLAN/profile/v1">
+	<name>CU_2kyA</name>
+	<SSIDConfig>
+		<SSID>
+			<hex>43555F326B7941</hex>
+			<name>CU_2kyA</name>
+		</SSID>
+	</SSIDConfig>
+	<connectionType>ESS</connectionType>
+	<connectionMode>manual</connectionMode>
+	<MSM>
+		<security>
+			<authEncryption>
+				<authentication>WPA2PSK</authentication>
+				<encryption>AES</encryption>
+				<useOneX>false</useOneX>
+			</authEncryption>
+			<sharedKey>
+				<keyType>passPhrase</keyType>
+				<protected>true</protected>
+				<keyMaterial>01000000D08C9DDF0115D1118C7A00C04FC297EB0100000092BEA8B4C3821D43801122D426525299000000000200000000001066000000010000200000001D9359C02A5D2BCD569375B83B93F700B48E44C9C03572096F716C07F32B3D8E000000000E8000000002000020000000241D84DD31383FBD290ECEE1ABBC2C36D1D47072F15570F5AE7133E52CF3BE1210000000659177B2B474CA1765DF23BF0F95B86F400000007EA95FC30D84A43F0CD4BE201D2FA7BE55F0D00BA436C782FB2EB938558D4F209405734D52B208CFA7F916226C9392CC8639E61D0EF8A47CCCE9385953AB0D7F</keyMaterial>
+			</sharedKey>
+		</security>
+	</MSM>
+	<MacRandomization xmlns="http://www.microsoft.com/networking/WLAN/profile/v3">
+		<enableRandomization>false</enableRandomization>
+	</MacRandomization>
+</WLANProfile>
