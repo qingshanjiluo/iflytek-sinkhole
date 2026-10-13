@@ -41,6 +41,34 @@ Set-Location <你的路径>\iflytek-sinkhole
 - 系统没装 Node 也不想用自带运行时:`.\setup-on-this-pc.ps1 -BundleRuntime`
   (从 npmmirror 下载便携版 Node 到 `runtime\`)
 
+## 一键安装包(exe)与 GitHub 仓库
+
+**源码仓库(公开)**:https://github.com/qingshanjiluo/iflytek-sinkhole
+
+```powershell
+git clone https://github.com/qingshanjiluo/iflytek-sinkhole.git
+cd iflytek-sinkhole
+.\setup-on-this-pc.ps1     # 管理员 PowerShell,一条命令部署
+```
+
+**打一个自解压安装包**(任何 Windows 7/10/11 双击即装,自动 UAC 提权 → 铺开目录 → 跑 setup):
+
+```powershell
+.\make-installer.ps1              # 产物 dist\iflytek-sinkhole-setup.exe(捆绑 99MB 便携 Node)
+.\make-installer.ps1 -NoRuntime    # 不捆 Node(新机器安装时 setup 再下载)
+```
+
+- 安装包用 Windows 自带 **IExpress** 打包(零第三方依赖):exe 解压后由 `install.cmd`(GBK)
+  按扩展名重建 `public\`/`certs\`/`runtime\` 目录(IExpress 解压会拍平子目录),校验关键文件后
+  自动执行 `setup-on-this-pc.ps1`(证书/防火墙/开机自启/启动服务)
+- **构建机限制**:SED 必须 GBK 编码(只能在中文 Windows 构建)、构建路径不能含空格
+  (IExpress `/N` 不吃引号;脚本自动选 `TEMP`,含空格回退 `C:\iflytek-si-build`)
+- 自动化测试可注入环境变量:`INSTALL_DIR=目标目录`、`SKIP_SETUP=1`(只铺文件)、`AUTO_EXIT=1`(不暂停)
+- 卸载:安装目录里跑 `uninstall-on-this-pc.ps1`
+
+> ⚠️ 仓库是**公开**的:`config.json` 含登录密码与热点 SSID/密码、`home-wifi-profile.xml` 含
+> 家里 WiFi 凭据——**换机部署后务必改密码**;不想公开就去仓库 Settings 改 Private。
+
 ## 组成
 
 | 文件 | 作用 |
@@ -56,6 +84,7 @@ Set-Location <你的路径>\iflytek-sinkhole
 | `runtime/node.exe` | 便携 Node 运行时(v24 x64),换机免装 |
 | `make-cert.ps1` / `setup-firewall.ps1` / `register-autostart.ps1` | 单项脚本 |
 | `setup-on-this-pc.ps1` / `uninstall-on-this-pc.ps1` | **一键装机/卸载** |
+| `make-installer.ps1` | 打一键安装包 exe(IExpress,产物 `dist\iflytek-sinkhole-setup.exe`) |
 | `start.ps1` / `stop.ps1` | 手动后台启停(按 `--svc-sinkhole` 标记识别进程) |
 | `test-chat.js` | 聊天室双客户端自测 |
 | `test-dhcp.js` | DHCP 全流程自测(本机模拟手机 DISCOVER→OFFER→REQUEST→ACK) |

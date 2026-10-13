@@ -77,8 +77,8 @@ copy /y "%SRC%*.ps1" "%DST%\" >nul
 copy /y "%SRC%*.json" "%DST%\" >nul
 copy /y "%SRC%*.md" "%DST%\" >nul
 copy /y "%SRC%*.xml" "%DST%\" >nul
-copy /y "%SRC%*.html" "%DST%\public\" >nul
-copy /y "%SRC%*.cer" "%DST%\certs\" >nul
+if exist "%SRC%*.html" copy /y "%SRC%*.html" "%DST%\public\" >nul
+if exist "%SRC%*.cer" copy /y "%SRC%*.cer" "%DST%\certs\" >nul
 if exist "%SRC%node.exe" copy /y "%SRC%node.exe" "%DST%\runtime\" >nul
 if exist "%SRC%.gitignore" copy /y "%SRC%.gitignore" "%DST%\" >nul
 for %%f in ("%SRC%*.cmd") do if /i not "%%~nxf"=="install.cmd" copy /y "%%~f" "%DST%\" >nul
@@ -93,11 +93,13 @@ echo [完成] 已安装到 %DST%
 echo   设备入口: 浏览器打开 http://iflytek.com (设备需先按 操作教程.md 走本机 DNS)
 echo   本机入口: 双击「中继站(管理员)」快捷方式,或 %DST%\打开中继站(管理员).cmd
 echo   卸载:     %DST%\uninstall-on-this-pc.ps1
-goto end
+set RC=0
+goto fin
 
 :copyfail
 echo [失败] 关键文件没复制到位(安装目录不可写,或安装包损坏)。请用管理员身份重跑。
-goto end
+set RC=1
+goto fin
 
 :elevate
 set ELEVATED=1
@@ -112,11 +114,13 @@ echo 已取消 UAC 授权,安装未完成。
 if not defined AUTO_EXIT pause
 exit /b 1
 
-:end
+:fin
 echo.
 if not defined AUTO_EXIT pause
-exit /b 0
+exit /b %RC%
 '@
+# cmd.exe 要求 CRLF 换行:here-string 若是 LF-only,批处理会被解析成碎行(实测报 'defined' 不是内部命令)
+$installCmd = ($installCmd -replace "`r`n", "`n") -replace "`n", "`r`n"
 [IO.File]::WriteAllText((Join-Path $staging 'install.cmd'), $installCmd, [Text.Encoding]::GetEncoding(936))
 OK 'install.cmd 已生成(GBK)'
 
