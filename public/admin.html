@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>管理 · 身份组与流量 · 局域网中继站</title>
+<style>
+:root{
+  --paper:#f5f4f0; --panel:#fff; --ink:#12100d; --ink-2:#6b665c; --ink-3:#9a958a;
+  --line:#e2e0da; --line-2:#c9c6bd; --red:#d94f2b; --red-dark:#b23c1e; --red-soft:#f8e8e2;
+  --ok:#1f7a4d; --ok-soft:#e4f1ea; --warn:#a67c00; --bad:#b3261e; --bad-soft:#f7e7e6;
+  --s2:8px; --s3:12px; --s4:16px; --s5:24px; --r:2px;
+  --f-sans:"Helvetica Neue",Helvetica,Arial,"PingFang SC","Microsoft YaHei",sans-serif;
+  --f-mono:ui-monospace,"SF Mono","Cascadia Mono",Consolas,monospace;
+  --t-fast:.15s; --shadow:0 1px 2px rgba(18,16,13,.06),0 6px 18px rgba(18,16,13,.05);
+}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:var(--paper);color:var(--ink);font:15px/1.65 var(--f-sans);
+  background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+  background-size:32px 32px;background-position:-1px -1px;-webkit-font-smoothing:antialiased}
+a{color:var(--red);text-decoration:none;border-bottom:1px solid transparent}
+a:hover{border-bottom-color:var(--red)}
+:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+.wrap{max-width:980px;margin:0 auto;padding:0 var(--s4) 80px}
+.topbar{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) 0;border-bottom:2px solid var(--ink);margin-bottom:var(--s5);flex-wrap:wrap}
+.glyph{width:30px;height:30px;flex:none;background:var(--red);color:#fff;display:grid;place-items:center;font:700 13px/1 var(--f-mono)}
+.word{font:600 12px/1 var(--f-sans);letter-spacing:.2em;text-transform:uppercase}
+.sp{flex:1}
+.chip{display:inline-flex;align-items:center;gap:7px;font:500 12px/1 var(--f-sans);border:1px solid var(--line-2);background:var(--panel);padding:7px 10px}
+.chip.admin{border-color:var(--red);color:var(--red)}
+h1{margin:0 0 var(--s2);font:800 clamp(26px,5vw,40px)/1.1 var(--f-sans);letter-spacing:-.03em;text-transform:uppercase}
+h1 em{font-style:normal;color:var(--red)}
+.kicker{display:flex;gap:var(--s4);flex-wrap:wrap;font:500 11px/1 var(--f-mono);letter-spacing:.1em;color:var(--ink-3);text-transform:uppercase;margin-bottom:var(--s5)}
+.sec{background:var(--panel);border:1px solid var(--line-2);margin-bottom:var(--s5);box-shadow:var(--shadow)}
+.sec-hd{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;padding:var(--s3) var(--s5);border-bottom:1px solid var(--line)}
+.sec-no{font:700 12px/1 var(--f-mono);color:#fff;background:var(--ink);padding:5px 7px;letter-spacing:.08em}
+.sec-hd h2{margin:0;font:700 15px/1.3 var(--f-sans);letter-spacing:.06em;text-transform:uppercase}
+.sec-hd .n{font:400 12.5px/1.5 var(--f-sans);color:var(--ink-3)}
+.sec-hd .sp{flex:1}
+.sec-bd{padding:var(--s5)}
+.btn{font:600 13px/1 var(--f-sans);letter-spacing:.05em;color:var(--ink);background:var(--panel);border:1px solid var(--line-2);
+  border-radius:var(--r);padding:9px 15px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;
+  transition:border-color var(--t-fast),background var(--t-fast),color var(--t-fast)}
+.btn:hover{border-color:var(--ink);background:var(--paper)}
+.btn.pri{background:var(--red);border-color:var(--red);color:#fff}
+.btn.pri:hover{background:var(--red-dark);border-color:var(--red-dark)}
+.btn.danger:hover{border-color:var(--bad);color:var(--bad);background:var(--bad-soft)}
+.btn.sm{padding:6px 10px;font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{font:600 11px/1 var(--f-sans);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2);text-align:left;
+  padding:var(--s2) var(--s3);border-bottom:2px solid var(--ink)}
+td{padding:10px var(--s3);border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;font:500 13px/1 var(--f-mono);font-variant-numeric:tabular-nums}
+.mono{font:500 12.5px/1.5 var(--f-mono)}
+.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-2);background:var(--paper);
+  padding:3px 8px;font:500 12px/1.3 var(--f-sans);margin:2px 3px 2px 0;cursor:pointer;user-select:none}
+.pill input{margin:0;accent-color:var(--red)}
+.pill.locked{opacity:.55;cursor:not-allowed;background:var(--line)}
+.tag{display:inline-block;font:600 11px/1 var(--f-mono);letter-spacing:.06em;padding:4px 7px;border:1px solid var(--line-2);background:var(--paper)}
+.tag.admin{border-color:var(--red);color:var(--red);background:var(--red-soft)}
+.bar{height:7px;background:var(--line);position:relative;min-width:90px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--red);transition:width .3s}
+.bar.ok i{background:var(--ok)}
+.bar.warn i{background:var(--warn)}
+input[type=text],input[type=number]{font:400 14px/1.4 var(--f-mono);color:var(--ink);background:transparent;
+  border:none;border-bottom:1.5px solid var(--line-2);padding:7px 2px;outline:none;width:120px}
+input[type=text]:focus,input[type=number]:focus{border-bottom-color:var(--red);background:var(--red-soft)}
+select{font:400 13px/1.4 var(--f-sans);border:1px solid var(--line-2);background:var(--panel);padding:6px 8px;border-radius:var(--r)}
+.hint{font:500 12px/1.7 var(--f-sans);color:var(--ink-3);margin-top:var(--s3)}
+.hint b{color:var(--ink-2)}
+.formrow{display:flex;gap:var(--s4);flex-wrap:wrap;align-items:center;margin-bottom:var(--s4)}
+.formrow label{font:600 11px/1 var(--f-sans);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2)}
+.empty{padding:var(--s5);text-align:center;color:var(--ink-3);font-size:13.5px}
+#toast{position:fixed;left:50%;bottom:34px;transform:translate(-50%,20px);opacity:0;background:var(--ink);color:#fff;
+  font:500 13px/1 var(--f-sans);padding:11px 18px;border-radius:var(--r);pointer-events:none;transition:all .25s;z-index:99}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+@media (max-width:640px){ .sec-bd{padding:var(--s4) var(--s3)} td,th{padding:8px 6px} input[type=text],input[type=number]{width:84px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <span class="glyph" aria-hidden="true">TR</span>
+    <span class="word">LAN Relay Station</span>
+    <span class="sp"></span>
+    <span class="chip admin">管理员</span>
+    <a class="chip" href="/relay" style="color:var(--ink-2)">← 中继站</a>
+  </div>
+
+  <h1>管理<em>后台</em></h1>
+  <div class="kicker">
+    <span>ROLES <b id="kRoles">—</b></span>
+    <span>ACCOUNTS <b id="kAcc">—</b></span>
+    <span>TRAFFIC <b id="kMonth">—</b></span>
+  </div>
+
+  <!-- 01 身份组 -->
+  <section class="sec">
+    <div class="sec-hd">
+      <span class="sec-no">01</span><h2>身份组与权限范围</h2>
+      <span class="n">storage/roles.json · 改完立即生效</span>
+      <span class="sp"></span>
+      <button class="btn sm" id="addRoleBtn" type="button">+ 新建身份组</button>
+      <button class="btn sm pri" id="saveRolesBtn" type="button">保存身份组</button>
+    </div>
+    <div class="sec-bd">
+      <div class="formrow">
+        <label>默认权限(未配置的账号)</label>
+        <span id="defaultPerms"></span>
+      </div>
+      <div id="rolesWrap"><div class="empty">加载中…</div></div>
+      <div class="hint">
+        权限位:<b>upload</b> 上传 · <b>download</b> 下载 · <b>preview</b> 预览(图/PDF/EPUB) ·
+        <b>chat</b> 聊天 · <b>web</b> 网页中转 · <b>delete</b> 删文件 · <b>admin</b> 进本页。<br>
+        配额 = 每月上传+下载合计上限(MB),<b>0 = 不限</b>;每月 1 日自动归零。
+        内置组 <b>admin</b>(管理员)永远全权限不设限,<b>user</b> = 默认权限,自定义组按下方配置。
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 账号分组 -->
+  <section class="sec">
+    <div class="sec-hd">
+      <span class="sec-no">02</span><h2>账号 → 身份组</h2>
+      <span class="n">config.json relay.auth · 改完重启服务生效</span>
+    </div>
+    <div class="sec-bd">
+      <div id="accWrap"><div class="empty">加载中…</div></div>
+      <div class="hint">账号/密码仍在 <b>config.json → relay.auth.accounts</b> 里手工增删;本页只改身份组归属。</div>
+    </div>
+  </section>
+
+  <!-- 03 流量 -->
+  <section class="sec">
+    <div class="sec-hd">
+      <span class="sec-no">03</span><h2>本月流量</h2>
+      <span class="n" id="trafficMonth">—</span>
+      <span class="sp"></span>
+      <button class="btn sm" id="refreshTraffic" type="button">刷新</button>
+      <button class="btn sm danger" id="resetAll" type="button">全部清零</button>
+    </div>
+    <div class="sec-bd">
+      <div id="trafficWrap"><div class="empty">加载中…</div></div>
+      <div class="hint">
+        __local__ = 本机/管理员免登录路径;__ip:x.x.x.x = 未登录设备(IP 计量,配额仅对登录账号生效)。
+        超配额的账号:上传直接 413、下载中断(<b>quotaExceeded</b>),管理/本机路径不受限。
+      </div>
+    </div>
+  </section>
+</div>
+
+<div id="toast" role="status"></div>
+
+<script>
+(function(){
+'use strict';
+var $=function(id){return document.getElementById(id);};
+var PERMS=['upload','download','preview','chat','web','delete','admin'];
+var PERM_CN={upload:'上传',download:'下载',preview:'预览',chat:'聊天',web:'网页中转',delete:'删文件',admin:'管理'};
+var state={defaultPerms:[],roles:{}};
+function toast(m){var t=$('toast');t.textContent=m;t.classList.add('show');
+  clearTimeout(t._h);t._h=setTimeout(function(){t.classList.remove('show');},2400);}
+function fmtSize(n){if(n<1024)return n+' B';var u=['KB','MB','GB','TB'],i=-1;
+  do{n/=1024;i++;}while(n>=1024&&i<u.length-1);return (n<10?n.toFixed(1):Math.round(n))+' '+u[i];}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){
+  return {'&':'&','<':'<','>':'>','"':'"'}[c];});}
+function permPills(perms,onchange,lockedAll){
+  var box=document.createElement('span');
+  PERMS.forEach(function(p){
+    var l=document.createElement('label'); l.className='pill';
+    var cb=document.createElement('input'); cb.type='checkbox';
+    cb.checked=perms.indexOf(p)>=0;
+    cb.onchange=function(){onchange(p,cb.checked);};
+    if(lockedAll){cb.disabled=true;l.classList.add('locked');}
+    l.appendChild(cb); l.appendChild(document.createTextNode(PERM_CN[p]));
+    box.appendChild(l);
+  });
+  return box;
+}
+/* ---- 01 身份组 ---- */
+function renderRoles(){
+  $('kRoles').textContent=Object.keys(state.roles).length+' 组';
+  $('defaultPerms').innerHTML='';
+  $('defaultPerms').appendChild(permPills(state.defaultPerms,function(p,on){
+    if(on){if(state.defaultPerms.indexOf(p)<0)state.defaultPerms.push(p);}
+    else state.defaultPerms=state.defaultPerms.filter(function(x){return x!==p;});
+  }));
+  var wrap=$('rolesWrap'); wrap.innerHTML='';
+  if(!Object.keys(state.roles).length){
+    wrap.innerHTML='<div class="empty">还没有自定义身份组 —— 点右上「+ 新建身份组」创建(如 学生组/访客组),再在下面给账号分组</div>';
+    return;
+  }
+  var tb=document.createElement('table');
+  tb.innerHTML='<thead><tr><th>身份组</th><th>权限范围</th><th class="num">配额 MB/月</th><th></th></tr></thead>';
+  var tbody=document.createElement('tbody');
+  Object.keys(state.roles).forEach(function(rn){
+    var r=state.roles[rn];
+    var tr=document.createElement('tr');
+    var td1=document.createElement('td');
+    var inp=document.createElement('input'); inp.type='text'; inp.value=rn; inp.style.width='90px';
+    inp.onchange=function(){
+      var nn=inp.value.trim(); if(!nn||nn===rn||state.roles[nn])return;
+      var nr={}; Object.keys(state.roles).forEach(function(k){nr[k===rn?nn:k]=state.roles[k];});
+      state.roles=nr; renderRoles();
+    };
+    td1.appendChild(inp); td1.className='mono';
+    var td2=document.createElement('td');
+    td2.appendChild(permPills(r.perms===null?state.defaultPerms.slice():r.perms,function(p,on){
+      var cur=r.perms===null?state.defaultPerms.slice():r.perms.slice();
+      if(on){if(cur.indexOf(p)<0)cur.push(p);}
+      else cur=cur.filter(function(x){return x!==p;});
+      r.perms=cur;
+    }));
+    var td3=document.createElement('td'); td3.className='num';
+    var q=document.createElement('input'); q.type='number'; q.min='0'; q.value=r.monthlyQuotaMB;
+    q.style.width='84px'; q.onchange=function(){ r.monthlyQuotaMB=Math.max(0,parseInt(q.value,10)||0); };
+    td3.appendChild(q);
+    var td4=document.createElement('td');
+    var del=document.createElement('button'); del.className='btn sm danger'; del.type='button'; del.textContent='删除';
+    del.onclick=function(){ delete state.roles[rn]; renderRoles(); };
+    td4.appendChild(del);
+    tr.append(td1,td2,td3,td4); tbody.appendChild(tr);
+  });
+  tb.appendChild(tbody); wrap.appendChild(tb);
+}
+$('addRoleBtn').onclick=function(){
+  var n=prompt('新身份组名(如:学生组 / 访客组):','新组');
+  n=(n||'').trim();
+  if(!n||state.roles[n]||n==='admin'||n==='user'){toast('名字无效或已存在');return;}
+  state.roles[n]={perms:state.defaultPerms.slice(),monthlyQuotaMB:0};
+  renderRoles();
+};
+$('saveRolesBtn').onclick=function(){
+  fetch('/api/admin/roles',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({defaultPerms:state.defaultPerms,roles:state.roles})})
+    .then(function(r){return r.json();})
+    .then(function(j){toast(j.ok?'身份组已保存,立即生效':'保存失败: '+(j.error||''));})
+    .catch(function(){toast('网络错误,保存失败');});
+};
+/* ---- 02 账号分组 ---- */
+function renderAccounts(accs,roles){
+  $('kAcc').textContent=accs.length+' 个';
+  var wrap=$('accWrap');
+  if(!accs.length){wrap.innerHTML='<div class="empty">config.json 里还没有账号</div>';return;}
+  var tb=document.createElement('table');
+  tb.innerHTML='<thead><tr><th>账号</th><th>身份组</th><th class="num">该组配额</th></tr></thead>';
+  var tbody=document.createElement('tbody');
+  var all=roles.concat(['admin','user']);
+  accs.forEach(function(a){
+    var tr=document.createElement('tr');
+    var td1=document.createElement('td'); td1.className='mono'; td1.textContent=a.user;
+    var td2=document.createElement('td');
+    var sel=document.createElement('select');
+    all.forEach(function(rn){
+      var o=document.createElement('option'); o.value=rn; o.textContent=rn+(rn==='admin'?'(内置全权)':'');
+      if(rn===a.role)o.selected=true; sel.appendChild(o);
+    });
+    td2.appendChild(sel);
+    var td3=document.createElement('td'); td3.className='num';
+    var quota=sel.value==='admin'?0:(state.roles[sel.value]?state.roles[sel.value].monthlyQuotaMB:0);
+    td3.textContent=quota?(quota+' MB'):'不限';
+    sel.onchange=function(){
+      quota=sel.value==='admin'?0:(state.roles[sel.value]?state.roles[sel.value].monthlyQuotaMB:0);
+      td3.textContent=quota?(quota+' MB'):'不限';
+      var body={}; body[a.user]=sel.value;
+      fetch('/api/admin/accounts',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({roles:body})})
+        .then(function(r){return r.json();})
+        .then(function(j){toast(j.ok?a.user+' → '+sel.value:'改组失败: '+(j.error||''));})
+        .catch(function(){toast('网络错误');});
+    };
+    tr.append(td1,td2,td3); tbody.appendChild(tr);
+  });
+  tb.appendChild(tbody); wrap.innerHTML=''; wrap.appendChild(tb);
+}
+/* ---- 03 流量 ---- */
+function renderTraffic(data){
+  $('kMonth').textContent=data.month;
+  $('trafficMonth').textContent='统计月份 '+data.month+' · 共 '+data.rows.length+' 条记录';
+  var wrap=$('trafficWrap');
+  if(!data.rows.length){wrap.innerHTML='<div class="empty">本月暂无流量记录</div>';return;}
+  var tb=document.createElement('table');
+  tb.innerHTML='<thead><tr><th>身份</th><th class="num">上行</th><th class="num">下行</th><th class="num">合计</th><th>占比</th><th></th></tr></thead>';
+  var tbody=document.createElement('tbody');
+  var max=1; data.rows.forEach(function(r){max=Math.max(max,r.up+r.down);});
+  data.rows.forEach(function(r){
+    var tot=r.up+r.down;
+    var tr=document.createElement('tr');
+    var td1=document.createElement('td'); td1.className='mono';
+    var name=r.user.replace('__ip:','未登录 ');
+    td1.textContent=name==='__local__'?'本机/管理员':name;
+    var td2=document.createElement('td'); td2.className='num'; td2.textContent=fmtSize(r.up);
+    var td3=document.createElement('td'); td3.className='num'; td3.textContent=fmtSize(r.down);
+    var td4=document.createElement('td'); td4.className='num'; td4.textContent=fmtSize(tot);
+    var td5=document.createElement('td');
+    var bar=document.createElement('div'); bar.className='bar';
+    var usedPct=r.quota>0?(tot/(r.quota*1048576)):0;
+    if(r.quota>0&&usedPct>=1)bar.classList.add('warn'); else if(r.quota>0)bar.classList.add('ok');
+    var i=document.createElement('i');
+    i.style.width=Math.min(100,(tot/max)*100)+'%';
+    bar.appendChild(i);
+    var txt=document.createElement('div'); txt.className='hint'; txt.style.margin='4px 0 0';
+    txt.textContent=r.quota>0?('配额 '+r.quota+'MB,已用 '+Math.round(usedPct*100)+'%'):'不限';
+    td5.append(bar,txt);
+    var td6=document.createElement('td');
+    var rb=document.createElement('button'); rb.className='btn sm'; rb.type='button'; rb.textContent='清零';
+    rb.onclick=function(){
+      if(!confirm('清零 '+td1.textContent+' 的本月流量?'))return;
+      fetch('/api/admin/traffic/reset',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({user:r.user})})
+        .then(function(r2){return r2.json();})
+        .then(function(j){toast(j.ok?'已清零':'失败');loadTraffic();})
+        .catch(function(){toast('网络错误');});
+    };
+    td6.appendChild(rb);
+    tr.append(td1,td2,td3,td4,td5,td6); tbody.appendChild(tr);
+  });
+  tb.appendChild(tbody); wrap.innerHTML=''; wrap.appendChild(tb);
+}
+$('refreshTraffic').onclick=loadTraffic;
+$('resetAll').onclick=function(){
+  if(!confirm('清零全部流量统计?'))return;
+  fetch('/api/admin/traffic/reset',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})
+    .then(function(r){return r.json();})
+    .then(function(j){toast(j.ok?'已全部清零':'失败');loadTraffic();})
+    .catch(function(){toast('网络错误');});
+};
+function loadTraffic(){
+  fetch('/api/admin/traffic').then(function(r){return r.json();})
+    .then(renderTraffic).catch(function(){});
+}
+/* ---- 装载 ---- */
+fetch('/api/admin/roles').then(function(r){
+  if(!r.ok) throw new Error('forbidden'); return r.json();
+}).then(function(d){
+  state.defaultPerms=d.defaultPerms||[]; state.roles=d.roles||{};
+  PERMS=d.perms||PERMS;
+  renderRoles();
+  return fetch('/api/admin/accounts').then(function(r){return r.json();});
+}).then(function(d){ renderAccounts(d.accounts||[],d.roles||[]); loadTraffic(); })
+  .catch(function(){ $('rolesWrap').innerHTML='<div class="empty">无权限或加载失败 —— <a href="/relay">回中继站</a></div>'; });
+})();
+</script>
+</body>
+</html>

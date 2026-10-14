@@ -142,10 +142,23 @@ function isAdmin(req) {
 function checkTokenStrict(req) {
   return !!R.token && req.headers['x-relay-token'] === R.token;
 }
-/* ---------- 账号登录会话(配置 relay.auth) ---------- */
+/* ---------- 账号登录会话(配置 relay.auth) ----------
+ * 权限范围与流量配额(storage/roles.json + storage/traffic.json):
+ *  roles.json  {"__version":1,"defaultPerms":[...],"roles":{角色:{perms,monthlyQuotaMB}}}
+ *              缺失/损坏自动回默认:全员 upload/download/preview/chat/web,quota 0=不限
+ *  traffic.json {用户:{y:2026,m:10,up:字节,down:字节}} 按月落盘,月变自动归零;
+ *              追踪键 = 已登录账号,本机/token 免登录访问记 "__local__"(计数不设限)
+ *  接口:/api/admin/roles GET|POST、/api/admin/traffic GET、/admin 管理页(全部 canAdmin)
+ */
 const AUTH = () => (R && R.auth) || {};
 const SESSION_DAYS = 30;
 const sessionsPath = path.join(root, 'storage', 'sessions.json');
+const rolesPath = path.join(root, 'storage', 'roles.json');
+const trafficPath = path.join(root, 'storage', 'traffic.json');
+const PERMS = ['upload', 'download', 'preview', 'chat', 'web', 'delete', 'admin'];
+const DEFAULT_PERMS = ['upload', 'download', 'preview', 'chat', 'web'];
+let rolesCfg = null;   // storage/roles.json 的规范化视图(见 loadRoles)
+let traffic = {};      // storage/traffic.json:用户 -> {y,m,up,down}
 let sessions = {};          // sid -> { user, exp }
 let sessionsTimer = null;
 function loadSessions() {
@@ -189,17 +202,205 @@ function requireAuth(req) { return !AUTH().enabled || !!sessionOf(req) || isAdmi
 function canAdmin(req) {
   if (isAdmin(req) || checkTokenStrict(req)) return true;
   const s = sessionOf(req);
-  return !!(s && roleOf(s.user) === 'admin');
+  if (!s) return false;
+  const role = roleOf(s.user);
+  return role === 'admin' || permsOfRole(role).includes('admin'); // 自定义身份组授 admin 权限同样可进管理
+}
+
+/* ---------- 角色权限与流量配额 ---------- */
+function loadRoles() {
+  let j = null;
+  try { j = JSON.parse(fs.readFileSync(rolesPath, 'utf8')); } catch {}
+  if (!j || typeof j !== 'object') j = {};
+  const dp = Array.isArray(j.defaultPerms) ? j.defaultPerms.filter((p) => PERMS.includes(p)) : null;
+  const src = (j.roles && typeof j.roles === 'object') ? j.roles : {};
+  const cleaned = {};
+  for (const [rn, rv] of Object.entries(src)) {
+    if (!rv || typeof rv !== 'object') continue;
+    const q = Number(rv.monthlyQuotaMB);
+    cleaned[rn] = {
+      perms: Array.isArray(rv.perms) ? rv.perms.filter((p) => PERMS.includes(p)) : null, // null=跟随 defaultPerms
+      monthlyQuotaMB: Number.isFinite(q) && q >= 0 ? q : 0,                                // 0=不限
+    };
+  }
+  rolesCfg = { defaultPerms: dp && dp.length ? dp : DEFAULT_PERMS.slice(), roles: cleaned };
+  return rolesCfg;
+}
+let rolesTimer = null;
+function saveRoles() {
+  if (rolesTimer) return;
+  rolesTimer = setTimeout(() => {
+    rolesTimer = null;
+    try { fs.writeFileSync(rolesPath, JSON.stringify(rolesCfg, null, 2)); } catch {}
+  }, 200);
+}
+function permsOfRole(role) {
+  if (role === 'admin') return PERMS.slice(); // 内置管理员组=全权限(不可被 roles.json 削权)
+  const r = rolesCfg.roles[role];
+  return r && r.perms ? r.perms : rolesCfg.defaultPerms;
+}
+function quotaOfRole(role) {
+  if (role === 'admin') return 0;
+  const r = rolesCfg.roles[role];
+  return r ? r.monthlyQuotaMB : 0; // 未配置的角色(=任意自定义角色名)不设限
+}
+function loadTraffic() {
+  try { const j = JSON.parse(fs.readFileSync(trafficPath, 'utf8')); if (j && typeof j === 'object') traffic = j; } catch {}
+  pruneTraffic();
+}
+function pruneTraffic() {
+  const now = new Date();
+  for (const [u, t] of Object.entries(traffic)) {
+    if (!t || t.y !== now.getUTCFullYear() || t.m !== now.getUTCMonth() + 1) delete traffic[u];
+  }
+}
+let trafficTimer = null;
+function saveTraffic(now) {
+  const w = () => { try { pruneTraffic(); fs.writeFileSync(trafficPath, JSON.stringify(traffic)); } catch {} };
+  if (now) { if (trafficTimer) { clearTimeout(trafficTimer); trafficTimer = null; } return w(); }
+  if (trafficTimer) return;
+  trafficTimer = setTimeout(() => { trafficTimer = null; w(); }, 400);
+}
+/* 账号身份组写回 config.json(relay.auth.roles)——身份组归属仍在 config,权限/配额在 roles.json */
+function saveConfigRoles(roles) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
+    if (!cfg.relay || typeof cfg.relay !== 'object') cfg.relay = {};
+    if (!cfg.relay.auth || typeof cfg.relay.auth !== 'object') cfg.relay.auth = {};
+    cfg.relay.auth.roles = roles;
+    fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(cfg, null, 2) + '\n');
+  } catch (e) { log(`[ADMIN] 写 config.json 失败: ${e.message}`); }
+}
+/* 当前请求的计量身份:已登录=账号;本机/token 免登录=__local__;其它=__ip:<地址> */
+function trackUser(req) {
+  const s = sessionOf(req);
+  if (s) return s.user;
+  return (isAdmin(req) || checkTokenStrict(req)) ? '__local__' : '__ip:' + clientIp(req);
+}
+function quotaStateOf(req) {
+  if (!AUTH().enabled) return { quota: 0, up: 0, down: 0 }; // 未开登录=信任网络,不设限
+  const s = sessionOf(req);
+  if (isAdmin(req) || checkTokenStrict(req)) return { quota: 0, up: 0, down: 0 }; // 管理路径不设限
+  const quota = s ? quotaOfRole(roleOf(s.user)) : 0;
+  const t = traffic[trackUser(req)] || { up: 0, down: 0 };
+  return { quota, up: t.up || 0, down: t.down || 0 };
+}
+/* 流量入账(上传/下载字节);超限时返回剩余可用量(正数),否则 null */
+function addTraffic(req, field, bytes) {
+  if (!(bytes > 0)) return null;
+  const st = quotaStateOf(req);
+  const used = (field === 'up' ? st.up : st.down) + bytes;
+  const k = trackUser(req);
+  if (!traffic[k]) traffic[k] = { y: new Date().getUTCFullYear(), m: new Date().getUTCMonth() + 1, up: 0, down: 0 };
+  traffic[k][field] = (traffic[k][field] || 0) + bytes;
+  saveTraffic();
+  if (st.quota > 0) {
+    const total = st.up + st.down + bytes;
+    if (total > st.quota * 1048576) return Math.max(0, st.quota * 1048576 - (st.up + st.down));
+  }
+  return null;
+}
+/* 权限判定:本机/token=全放行;已登录=按其角色;未开登录=全放行(信任网络) */
+function hasPerm(req, perm) {
+  if (isAdmin(req) || checkTokenStrict(req)) return true;
+  if (!AUTH().enabled) return true;
+  const s = sessionOf(req);
+  if (!s) return false; // requireAuth 已拦未登录,到这里即缺权限
+  return permsOfRole(roleOf(s.user)).includes(perm);
+}
+/* 连接建立时快照身份(聊天 WS 用);发消息时按当前 roles.json 动态判权限,收权限即时生效 */
+function chatPerms(cli) {
+  if (cli.isLocal) return PERMS.slice();                 // 本机/token 连接=全权限
+  if (!AUTH().enabled) return DEFAULT_PERMS.slice();
+  const s = cli.sid && sessions[cli.sid];
+  if (!s || s.exp < Date.now()) return [];               // 会话已登出/过期
+  return permsOfRole(roleOf(s.user));
+}
+/* /api/info 暴露的身份权限集 */
+function permsOfReq(req) {
+  if (isAdmin(req) || checkTokenStrict(req)) return PERMS.slice();
+  if (!AUTH().enabled) return DEFAULT_PERMS.slice();
+  const s = sessionOf(req);
+  return s ? permsOfRole(roleOf(s.user)) : [];
 }
 
 /* ---------- API 处理 ---------- */
 
+async function handleRolesPost(req, res) {
+  if (!canAdmin(req)) return json(res, 403, { error: '仅管理员' });
+  let buf;
+  try { buf = await readBody(req, 64 * 1024); } catch { return json(res, 413, { error: '请求过大' }); }
+  let j;
+  try { j = JSON.parse(buf.toString('utf8') || '{}'); } catch { return json(res, 400, { error: 'JSON 不合法' }); }
+  if (Array.isArray(j.defaultPerms)) {
+    const dp = j.defaultPerms.filter((x) => PERMS.includes(x));
+    rolesCfg.defaultPerms = dp.length ? dp : DEFAULT_PERMS.slice();
+  }
+  if (j.roles && typeof j.roles === 'object') {
+    const out = {};
+    for (const [rn, rv] of Object.entries(j.roles)) {
+      if (!/^[\w一-龥.-]{1,32}$/.test(rn) || !rv || typeof rv !== 'object') continue;
+      const q = Number(rv.monthlyQuotaMB);
+      out[rn] = {
+        perms: Array.isArray(rv.perms) ? rv.perms.filter((x) => PERMS.includes(x)) : null, // null=跟随默认权限
+        monthlyQuotaMB: Number.isFinite(q) && q > 0 ? Math.min(q, 1000000) : 0,            // 0=不限
+      };
+    }
+    rolesCfg.roles = out;
+  }
+  saveRoles();
+  log(`[ADMIN] ${clientIp(req)} 更新身份组配置: roles=${Object.keys(rolesCfg.roles).join(',') || '(无)'}`);
+  return json(res, 200, { ok: true, defaultPerms: rolesCfg.defaultPerms, roles: rolesCfg.roles });
+}
+
+async function handleTrafficReset(req, res) {
+  if (!canAdmin(req)) return json(res, 403, { error: '仅管理员' });
+  let buf;
+  try { buf = await readBody(req, 16 * 1024); } catch { return json(res, 413, { error: '请求过大' }); }
+  let j = {};
+  try { j = JSON.parse(buf.toString('utf8') || '{}'); } catch {}
+  if (j.user && traffic[j.user]) delete traffic[j.user];
+  else traffic = {}; // 不带 user=全部清零
+  saveTraffic(true);
+  log(`[ADMIN] ${clientIp(req)} 清零流量统计: ${j.user || '(全部)'}`);
+  return json(res, 200, { ok: true });
+}
+
+async function handleAccountsPost(req, res) {
+  if (!canAdmin(req)) return json(res, 403, { error: '仅管理员' });
+  let buf;
+  try { buf = await readBody(req, 64 * 1024); } catch { return json(res, 413, { error: '请求过大' }); }
+  let j;
+  try { j = JSON.parse(buf.toString('utf8') || '{}'); } catch { return json(res, 400, { error: 'JSON 不合法' }); }
+  const acc = authAccounts();
+  const roles = AUTH().roles && typeof AUTH().roles === 'object' ? AUTH().roles : {};
+  let changed = 0;
+  if (j.roles && typeof j.roles === 'object') {
+    for (const [u, rn] of Object.entries(j.roles)) {
+      if (!(u in acc)) continue;
+      if (rn === 'user') delete roles[u];
+      else if (/^[\w一-龥.-]{1,32}$/.test(rn)) roles[u] = rn;
+      else continue;
+      changed++;
+    }
+  }
+  if (changed) { AUTH().roles = roles; saveConfigRoles(roles); }
+  log(`[ADMIN] ${clientIp(req)} 调整 ${changed} 个账号身份组`);
+  return json(res, 200, { ok: true, changed });
+}
+
 function handleUpload(req, res) {
   if (!requireAuth(req)) return json(res, 401, { error: '未登录' });
   if (!checkToken(req)) return json(res, 403, { error: 'bad token' });
+  if (!hasPerm(req, 'upload')) return json(res, 403, { error: '当前身份组无上传权限' });
   const name = sanitizeName(req.headers['x-file-name']);
   const max = (R.maxUploadMB || 2048) * 1024 * 1024;
   const len = parseInt(req.headers['content-length'] || '0', 10);
+  const qs = quotaStateOf(req);
+  if (qs.quota > 0) {
+    const left = qs.quota * 1048576 - qs.up - qs.down;
+    if (len > left) return json(res, 413, { error: '本月流量配额不足(剩 ' + Math.floor(left / 1048576) + 'MB)', quotaExceeded: true });
+  }
   // 断点续传:同一文件键(x-upload-key)续传上次未完成的字节
   const key = String(req.headers['x-upload-key'] || '').replace(/[^0-9a-f]/gi, '').slice(0, 64);
   let offset = parseInt(req.headers['x-upload-offset'] || '0', 10);
@@ -213,18 +414,19 @@ function handleUpload(req, res) {
   const out = fs.createWriteStream(tmp, offset ? { flags: 'a' } : { flags: 'w' });
   let bytes = 0, aborted = false; // bytes = 本次新增
 
-  const fail = (code, msg) => {
+  const fail = (code, msg, quota) => {
     if (aborted) return;
     aborted = true;
     req.unpipe(out); out.destroy();
-    if (!key) fs.unlink(tmp, () => {}); // 无键的一次性上传直接清;有键的保留供续传
-    if (!res.headersSent) json(res, code, { error: msg });
+    if (!key || quota) fs.unlink(tmp, () => {}); // 一次性上传直接清;有键的保留供续传;配额超限清残件
+    if (!res.headersSent) json(res, code, quota ? { error: msg, quotaExceeded: true } : { error: msg });
     else res.destroy();
   };
 
   req.on('data', (c) => {
     bytes += c.length;
     if (offset + bytes > max) return fail(413, `文件超过 ${R.maxUploadMB}MB`);
+    if (addTraffic(req, 'up', c.length) !== null) return fail(413, '本月流量配额已用完', true);
   });
   req.on('error', () => fail(400, '上传请求中断'));
   out.on('error', (e) => fail(500, '写盘失败: ' + e.message));
@@ -256,11 +458,18 @@ function listFiles() {
 function streamFile(req, res, id, inline) {
   const f = meta.files[id];
   if (!f) return json(res, 404, { error: '文件不存在或已删除' });
+  if (!hasPerm(req, inline ? 'preview' : 'download')) return json(res, 403, { error: '当前身份组无此权限' });
   const fp = path.join(filesDir, id); // id 为服务端生成的十六进制,无路径穿越风险
   let st;
   try { st = fs.statSync(fp); } catch { delete meta.files[id]; saveMeta(); return json(res, 410, { error: '文件已丢失' }); }
 
   const total = st.size;
+  const qs = quotaStateOf(req);
+  if (qs.quota > 0) {
+    const left = qs.quota * 1048576 - qs.up - qs.down;
+    if (left <= 0) return json(res, 413, { error: '本月流量配额已用完', quotaExceeded: true });
+    if (total > left) return json(res, 413, { error: '超出本月剩余配额(剩 ' + Math.floor(left / 1048576) + 'MB)', quotaExceeded: true });
+  }
   const baseHeaders = {
     'content-type': inline ? mimeOf(f.name) : 'application/octet-stream',
     'content-disposition': disposition(f.name, inline),
@@ -288,7 +497,11 @@ function streamFile(req, res, id, inline) {
   if (status === 206) headers['content-range'] = `bytes ${start}-${end}/${total}`;
   res.writeHead(status, headers);
   if (req.method === 'HEAD') return res.end();
+  // 下载流量入账(按本次实际发字节;非受限身份同样计数,便于管理页观察)
+  const acc = { n: 0 };
   fs.createReadStream(fp, { start, end })
+    .on('data', (c) => { acc.n += c.length; })
+    .on('end', () => { if (acc.n) addTraffic(req, 'down', acc.n); })
     .on('error', () => res.destroy())
     .pipe(res);
 }
@@ -341,6 +554,18 @@ function serveIndexPage(req, res) {
   if (!requireAuth(req)) return redirect(res, '/auth/login?next=' + encodeURIComponent(req.url || '/'));
   fs.readFile(path.join(root, 'public', 'index.html'), (err, buf) => {
     if (err) { res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' }); res.end('public/index.html 读取失败'); return; }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(buf);
+  });
+}
+function serveAdminPage(req, res) {
+  if (!requireAuth(req)) return redirect(res, '/auth/login?next=' + encodeURIComponent(req.url || '/admin'));
+  if (!canAdmin(req)) {
+    res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end('仅管理员可访问 /admin(本机直入即管理员)');
+  }
+  fs.readFile(path.join(root, 'public', 'admin.html'), (err, buf) => {
+    if (err) { res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' }); res.end('public/admin.html 读取失败'); return; }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     res.end(buf);
   });
@@ -445,7 +670,12 @@ function wsAccept(req, socket) {
   const q = new URL(req.url, 'http://x').searchParams;
   let name = String(q.get('name') || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 16) || '朋友';
   if ([...clients].some((c) => c.name === name)) name += '-' + crypto.randomBytes(1).toString('hex');
-  const cli = { socket, name, ip: clientIp(req), buf: Buffer.alloc(0), frag: [], lastPost: 0, closed: false };
+  const sess = sessionOf(req);
+  const cli = {
+    socket, name, ip: clientIp(req), buf: Buffer.alloc(0), frag: [], lastPost: 0, closed: false,
+    sid: sess ? sess.sid : null,
+    isLocal: isAdmin(req) || checkTokenStrict(req),
+  };
   clients.add(cli);
   wsSend(cli, { type: 'hello', name, online: [...clients].map((c) => ({ name: c.name, ip: c.ip })), hist: chatLog.slice(-100) });
   pushMsg({ sys: true, text: `${name} 加入了聊天室`, ts: Date.now() });
@@ -501,6 +731,7 @@ function handleCliText(raw, cli) {
   cli.lastPost = now;
   const text = obj.text.replace(/[\u0000-\u0008\u000b-\u001f]/g, '').trim().slice(0, 2000);
   if (!text) return;
+  if (!chatPerms(cli).includes('chat')) return; // 按当前角色实时判定(收权限即时生效)
   pushMsg({ from: cli.name, text, ts: now });
 }
 
@@ -681,6 +912,8 @@ function extractEpubText(buf) {
 async function handleBrowse(req, res, rawUrl, modeOpts) {
   const PR = R.proxy || {};
   const MIRROR = !!modeOpts; // 镜像模式:出错不露馅,静默回中继站
+  // 网页中转权限:仅真实 /p/ 中转受 web 权限管;镜像门户(伪装门面)对匿名可见,登录在 /relay 才要求
+  if (!MIRROR && !hasPerm(req, 'web')) return json(res, 403, { error: '当前身份组无网页中转权限' });
   if (PR.enabled === false) return MIRROR ? serveIndexPage(req, res) : browseErr(res, '转发浏览功能已关闭(config.relay.proxy.enabled=false)', '');
   let target;
   try { target = new URL(rawUrl); } catch { return MIRROR ? serveIndexPage(req, res) : browseErr(res, '网址不合法(请在地址栏输入 http:// 或 https:// 开头的完整地址)', rawUrl); }
@@ -740,6 +973,7 @@ async function handleBrowse(req, res, rawUrl, modeOpts) {
         up.on('error', () => { if (!res.headersSent) fail('读取资源失败', u.href); else res.destroy(); });
         up.on('end', () => {
           const body = Buffer.concat(chunks);
+          if (body.length) addTraffic(req, 'down', body.length); // 中转浏览流量入账(观察用,不设限)
           if (ct.includes('html')) {
             const html = rewriteBrowseHtml(decodePage(body, up.headers['content-type']), u.href, modeOpts);
             res.writeHead(up.statusCode || 200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
@@ -845,8 +1079,39 @@ const router = (req, res) => {
         maxUploadMB: R.maxUploadMB, fileCount: Object.keys(meta.files).length, noteMax: NOTE_MAX,
         admin: canAdmin(req),
         auth: { enabled: !!AUTH().enabled, user: s ? s.user : null, role: s ? roleOf(s.user) : (isAdmin(req) ? 'admin' : null) },
+        perms: permsOfReq(req),
+        usage: quotaStateOf(req), // {quota, up, down} 本月(月变自动归零);quota=0 不限
       });
     }
+    // —— 管理接口(身份组/权限范围/流量) ——
+    if (p === '/admin' && (req.method === 'GET' || req.method === 'HEAD')) return serveAdminPage(req, res);
+    if (p === '/api/admin/roles' && req.method === 'GET') {
+      if (!canAdmin(req)) return json(res, 403, { error: '仅管理员' });
+      return json(res, 200, {
+        perms: PERMS, defaultPerms: rolesCfg.defaultPerms, roles: rolesCfg.roles,
+        accounts: Object.keys(authAccounts()),
+      });
+    }
+    if (p === '/api/admin/roles' && req.method === 'POST') return handleRolesPost(req, res);
+    if (p === '/api/admin/accounts' && req.method === 'GET') {
+      if (!canAdmin(req)) return json(res, 403, { error: '仅管理员' });
+      const acc = authAccounts();
+      return json(res, 200, {
+        accounts: Object.keys(acc).map((u) => ({ user: u, role: roleOf(u), quotaMB: quotaOfRole(roleOf(u)) })),
+        roles: Object.keys(rolesCfg.roles).concat(['user', 'admin']),
+      });
+    }
+    if (p === '/api/admin/accounts' && req.method === 'POST') return handleAccountsPost(req, res);
+    if (p === '/api/admin/traffic' && req.method === 'GET') {
+      if (!canAdmin(req)) return json(res, 403, { error: '仅管理员' });
+      pruneTraffic();
+      const rows = Object.entries(traffic).map(([u, t]) => ({
+        user: u, up: t.up || 0, down: t.down || 0, y: t.y, m: t.m,
+        quota: u.startsWith('__') ? 0 : quotaOfRole(roleOf(u)),
+      })).sort((a, b) => (b.up + b.down) - (a.up + a.down));
+      return json(res, 200, { month: new Date().toISOString().slice(0, 7), rows });
+    }
+    if (p === '/api/admin/traffic/reset' && req.method === 'POST') return handleTrafficReset(req, res);
     // —— 登录/登出(账号鉴权) ——
     if (p === '/auth/login' && req.method === 'GET') {
       if (requireAuth(req)) return redirect(res, safeNext(url.searchParams.get('next')));
@@ -880,6 +1145,7 @@ const router = (req, res) => {
     }
     if (p === '/api/chat/clear' && req.method === 'POST') {
       if (!canAdmin(req)) return json(res, 403, { error: '仅管理员可清空聊天(本机访问即管理员)' });
+      if (AUTH().enabled && !hasPerm(req, 'admin')) return json(res, 403, { error: '当前身份组无管理权限' });
       chatLog = [];
       saveChat();
       broadcast({ type: 'clear' });
@@ -890,6 +1156,7 @@ const router = (req, res) => {
     let em = /^\/api\/preview\/epub\/([0-9a-f]{16})$/.exec(p);
     if (em && req.method === 'GET') {
       if (!requireAuth(req)) return json(res, 401, { error: '未登录' });
+      if (!hasPerm(req, 'preview')) return json(res, 403, { error: '当前身份组无预览权限' });
       const f = meta.files[em[1]];
       if (!f) return json(res, 404, { error: '不存在' });
       const fp = path.join(filesDir, em[1]);
@@ -931,6 +1198,7 @@ const router = (req, res) => {
     m = /^\/api\/files\/([0-9a-f]{16})$/.exec(p);
     if (m && req.method === 'DELETE') {
       if (!canAdmin(req)) return json(res, 403, { error: '仅管理员可删除文件(本机访问即管理员)' });
+      if (AUTH().enabled && !hasPerm(req, 'delete')) return json(res, 403, { error: '当前身份组无删除权限' });
       const id = m[1];
       if (!meta.files[id]) return json(res, 404, { error: '不存在' });
       log(`[RELAY][DEL] ${clientIp(req)} 删除 ${meta.files[id].name} (id=${id})`);
@@ -961,6 +1229,8 @@ function start(config, logger) {
   loadMeta();
   loadChat();
   loadSessions();
+  loadRoles();
+  loadTraffic();
   const srv = http.createServer(router);
   srv.requestTimeout = 0; // 大文件上传不设总时长限制(空闲由客户端决定)
   srv.headersTimeout = 60000;

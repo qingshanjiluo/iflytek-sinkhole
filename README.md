@@ -10,6 +10,7 @@
 | 🌐 网页转发 | 浏览器式中转(后退/刷新/地址栏);**Chrome UA 伪装+sec-fetch 头**降拦截、静态资源**内存缓存提速**、重定向 8 跳;输入任意网址(含内网页 `192.168.1.1`)逐页点入 |
 | 🔐 登录鉴权 | 账号密码登录(cookie 会话 30 天),`sifangzhiji` 为管理员=删文件/清聊天,其它账号=普通用户;本机免登录直入 |
 | 🎭 伪装门户 | 访问拦截域名先看到**实时镜像的原版官网**(`relay.mirror`),**点顶部 logo 进暗门** `/relay` 才是中继站后台 |
+| 🛡️ 身份组/配额 | `/admin` 管理页:按角色控权限(7 权限位存 `storage/roles.json` 热加载)+ 按账号月流量配额(超限 413,`storage/traffic.json` 月归零)+ 流量表/清零 |
 
 外加:📝 跨设备文字便签。零第三方依赖(纯 Node 内置模块),含便携运行时,
 **整个文件夹拷到任何 Windows 电脑一条命令部署**。
@@ -80,7 +81,8 @@ cd iflytek-sinkhole
 | `relay-site.js` | 中继站:文件 API + 聊天室(手写 RFC6455)+ 网页转发 `/p/` + 便签 + 登录鉴权/会话 |
 | `public/index.html` | 前端:上传(断点续传)/文件列表/聊天室/网页转发/便签,手机自适应 |
 | `public/login.html` | 登录页(账号密码表单) |
-| `storage/` | `files/`+`meta.json` 文件;`chat.json` 聊天记录;`sessions.json` 登录会话 |
+| `public/admin.html` | 管理页 `/admin`:身份组+权限范围、账号分组、本月流量(仅管理员) |
+| `storage/` | `files/`+`meta.json` 文件;`chat.json` 聊天;`sessions.json` 会话;`roles.json` 身份组权限;`traffic.json` 月流量 |
 | `runtime/node.exe` | 便携 Node 运行时(v24 x64),换机免装 |
 | `make-cert.ps1` / `setup-firewall.ps1` / `register-autostart.ps1` | 单项脚本 |
 | `setup-on-this-pc.ps1` / `uninstall-on-this-pc.ps1` | **一键装机/卸载** |
@@ -116,7 +118,12 @@ WS     /ws/chat?name=昵称   聊天室(hello含历史/msg/presence;历史500条
 POST   /api/chat/clear     清空聊天(管理员)
 GET/POST /p/<urlencode(URL)>  网页转发浏览(HTML改写链接/CSS url()/重定向跟踪/GBK转码/工具条/UA伪装/子资源缓存)
 GET    /api/preview/epub/<id>?c=1  EPUB 电子书预览(内置 zip 解压提取正文,章节导航)
-GET    /api/info           站点信息(含 admin/auth 登录状态);/api/files 每项含 pv 预览元数据
+GET    /api/info           站点信息(admin/auth 状态 + perms 身份权限 + usage 本月流量);/api/files 每项含 pv 预览元数据
+GET    /admin              管理页(serveIndexPage 同款鉴权,canAdmin 才行)
+GET/POST /api/admin/roles  读/存身份组(defaultPerms + roles{perms,monthlyQuotaMB})→ storage/roles.json,保存即热生效
+GET/POST /api/admin/accounts  账号→身份组:GET 列表,POST 改归属(写回 config.json relay.auth.roles,重启生效)
+GET    /api/admin/traffic   本月流量表(逐账号 up/down/配额占比)
+POST   /api/admin/traffic/reset  流量清零(body {user}=单个 / {}=全部)
 ```
 
 ## 配置要点(config.json)
@@ -132,6 +139,15 @@ GET    /api/info           站点信息(含 admin/auth 登录状态);/api/files 
   可删任意文件、清空聊天;普通用户无删除/清空按钮(接口 403)。
   本机快速入口:双击桌面「中继站(管理员)」快捷方式,或项目根 `打开中继站(管理员).cmd`。
 - `relay.proxy.blockPrivate`:true 时禁止转发内网地址(默认 false,便于看光猫/NAS 页)
+- **身份组+权限+流量配额**(管理页 `/admin`,入口=本机直入/admin 账号/授了 admin 权限的组):
+  - 权限位 `upload/download/preview/chat/web/delete/admin` 存 `storage/roles.json`;
+    `defaultPerms`=未配置账号的默认权限(默认前五个,不含 delete/admin);自定义组
+    `roles.组名={perms:null=跟随默认, monthlyQuotaMB:0=不限}`,**保存即热加载生效**
+  - 内置组 `admin`=全权限永不设限(防 roles.json 削权提权);账号归属仍在
+    `config.json relay.auth.roles`(管理页下拉改,改完重启服务)
+  - 月配额=上传+下载合计(MB):预检(超剩余直接拒)+流中(到线中断)双层 413 `quotaExceeded`;
+    每月 1 日自动归零;本机/token/管理路径与未开登录(`auth.enabled=false`)不设限
+  - 伪装门户对匿名可见——web 权限只管 `/p/` 网页中转;顶栏「流量 x/y MB」小标签 = `/api/info.usage`
 - `upstreamDNS`:非拦截域名转发的上游(默认阿里 223.5.5.5 / 腾讯 119.29.29.29)
 - `relay.dhcp`:**内置 DHCP 服务器**(替代已坏死的 ICS,无需系统共享):
   `{ "enabled": true, "gateway": "192.168.137.1", "mask": "255.255.255.0", "pool": "192.168.137.2-254", "leaseSec": 3600 }`。

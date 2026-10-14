@@ -273,6 +273,8 @@ footer{color:var(--ink-3);font:500 11.5px/2 var(--f-mono);letter-spacing:.04em;t
     <span class="glyph" aria-hidden="true">TR</span>
     <span class="word">LAN Relay Station</span>
     <span class="sp"></span>
+    <span class="chip" id="usageChip" style="display:none" title="本月流量(上传+下载)">流量 <b id="usageTxt">—</b></span>
+    <a class="chip chip-btn" id="adminLink" href="/admin" style="display:none;border-color:var(--red);color:var(--red)">管理</a>
     <span class="chip admin" id="adminBadge" style="display:none">管理员</span>
     <span class="chip" id="userChip" style="display:none">
       <b id="userName"></b>
@@ -431,9 +433,15 @@ let info={maxUploadMB:2048, admin:false};
 fetch('/api/info').then(r=>r.json()).then(d=>{
   info=d;
   $('dropCap').textContent='单文件上限 '+d.maxUploadMB+' MB';
-  if(d.admin){ $('adminBadge').style.display=''; $('chatClear').style.display=''; }
+  if(d.admin){ $('adminBadge').style.display=''; $('chatClear').style.display=''; $('adminLink').style.display='inline-flex'; }
   if(d.auth&&d.auth.user){ $('userChip').style.display='inline-flex';
     $('userName').textContent=d.auth.user+(d.auth.role==='admin'?' · 管理员':''); }
+  // 本月流量(配额身份才有意义;quota=0 显示用量不设限)
+  if(d.usage){
+    const tot=(d.usage.up||0)+(d.usage.down||0);
+    $('usageChip').style.display='inline-flex';
+    $('usageTxt').textContent=fmtSize(tot)+(d.usage.quota>0?(' / '+d.usage.quota+'MB'):'');
+  }
 }).catch(()=>{});
 $('logoutBtn').onclick=()=>{ location.href='/auth/logout'; };
 
@@ -585,7 +593,9 @@ function uploadOne(file){
     xhr.onload=()=>{ let j=null; try{ j=JSON.parse(xhr.responseText); }catch(e){}
       if(xhr.status===200&&j&&j.ok){ row.classList.add('ok'); fill.style.width='100%'; pct.textContent='完成';
         setTimeout(()=>row.remove(),4000); resolve(true); }
-      else{ row.classList.add('err'); pct.textContent=(j&&j.error)||('失败 '+xhr.status); resolve(false); } };
+      else{ row.classList.add('err'); pct.textContent=(j&&j.error)||('失败 '+xhr.status);
+        if(j&&j.quotaExceeded) toast('本月流量配额已用完(管理员可在 /admin 调整)');
+        resolve(false); } };
     xhr.onerror=()=>{ row.classList.add('err'); pct.textContent='网络中断(可重试,已留断点)'; resolve(false); };
     xhr.send(blob);
   });
