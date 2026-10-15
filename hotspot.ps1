@@ -1,9 +1,9 @@
 ﻿# =====================================================================
 #  经典 SoftAP 热点(伪装普通 WiFi):AIC/常规无线网卡免配置开热点
 #  用法(管理员 PowerShell):
-#    .\hotspot.ps1                      启动热点(默认 SSID China_Unicom)
+#    .\hotspot.ps1                      启动热点(SSID/密码读 config.json relay.hotspot,缺省 China_Unicom/unicom2026)
 #    .\hotspot.ps1 -Stop                关闭热点
-#    .\hotspot.ps1 -Ssid MyWiFi -Key 12345678   自定义名称/密码
+#    .\hotspot.ps1 -Ssid MyWiFi -Key 12345678   手动指定(优先于 config)
 #  说明:
 #  - WPA2-Personal/CCMP,与普通路由器空口协议一致,无"手机热点"特征
 #  - Windows 部分内置"移动热点"页面打不开时的可靠替代(经典 hostednetwork)
@@ -12,11 +12,25 @@
 #    家里 2.4G WiFi(hostednetwork 会跟随 STA 信道)或换 2.4G 档位的网卡
 # =====================================================================
 param(
-  [string]$Ssid = 'China_Unicom',
-  [string]$Key  = 'unicom2026',
+  [string]$Ssid = '',
+  [string]$Key  = '',
   [switch]$Stop
 )
 $ErrorActionPreference = 'Continue'
+
+# 优先级: 传参 > config.json relay.hotspot.ssid/key > 内置默认(安装向导写 config,这里自动跟随)
+if (-not $Ssid -or -not $Key) {
+  try {
+    $cfg = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'config.json'), (New-Object System.Text.UTF8Encoding($false))) | ConvertFrom-Json
+    $hs = $null
+    if ($cfg.relay) { $hs = $cfg.relay.hotspot }
+    if (-not $Ssid) { if ($hs -and $hs.ssid) { $Ssid = $hs.ssid } else { $Ssid = 'China_Unicom' } }
+    if (-not $Key)  { if ($hs -and $hs.key)  { $Key  = $hs.key }  else { $Key  = 'unicom2026' } }
+  } catch {
+    if (-not $Ssid) { $Ssid = 'China_Unicom' }
+    if (-not $Key)  { $Key = 'unicom2026' }
+  }
+}
 
 if ($Stop) {
   netsh wlan stop hostednetwork

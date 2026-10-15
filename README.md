@@ -52,19 +52,29 @@ cd iflytek-sinkhole
 .\setup-on-this-pc.ps1     # 管理员 PowerShell,一条命令部署
 ```
 
-**打一个自解压安装包**(任何 Windows 7/10/11 双击即装,自动 UAC 提权 → 铺开目录 → 跑 setup):
+**打一个带安装向导的安装包**(任何 Windows 7/10/11 双击即装):
 
 ```powershell
 .\make-installer.ps1              # 产物 dist\iflytek-sinkhole-setup.exe(捆绑 99MB 便携 Node)
 .\make-installer.ps1 -NoRuntime    # 不捆 Node(新机器安装时 setup 再下载)
+.\make-installer.ps1 -NoData       # 不打包 storage 数据(装成全新空库)
 ```
 
-- 安装包用 Windows 自带 **IExpress** 打包(零第三方依赖):exe 解压后由 `install.cmd`(GBK)
-  按扩展名重建 `public\`/`certs\`/`runtime\` 目录(IExpress 解压会拍平子目录),校验关键文件后
-  自动执行 `setup-on-this-pc.ps1`(证书/防火墙/开机自启/启动服务)
-- **构建机限制**:SED 必须 GBK 编码(只能在中文 Windows 构建)、构建路径不能含空格
+双击 exe 后的流程:解压 → UAC 提权 → **安装向导窗**(可改:安装目录 / 是否导入原机数据 /
+热点 SSID·密码 / 管理员账号)→ 铺开目录 → 应用配置 → `setup-on-this-pc.ps1`(证书/防火墙/
+开机自启/启动服务)→ 结果页(打开 管理器.exe / 打开 http://iflytek.com)。
+
+- **包内带全配置**:根文件 + `public\*.html` + `certs\iflytek.pfx/*.cer`(证书指纹不变,设备
+  已装的信任证书继续有效)+ `data.zip`(storage:文件列表/聊天/会话/身份组/流量,向导可选导入)
+- **中继站管理器.exe**:装完在安装目录,双击出 GUI —— 启动/停止/重启服务、53/80/443/28791
+  状态灯、开/关热点、打开中继站/管理后台、**配置对话框**(拦截域名/上传上限/登录开关/伪装门户/
+  上游DNS/热点默认,保存即写 config.json 并可自动重启)
+- 安装包用 Windows 自带 **IExpress** 打包(零第三方依赖):解压会拍平子目录,由 `install.cmd`(GBK+CRLF)
+  按扩展名重建目录;管理器 exe 用 .NET Framework 自带 csc 编译的 WinExe 壳(Win10/11 直接可跑)
+- **构建机限制**:SED 必须 GBK(只能在中文 Windows 构建)、构建路径不能含空格
   (IExpress `/N` 不吃引号;脚本自动选 `TEMP`,含空格回退 `C:\iflytek-si-build`)
-- 自动化测试可注入环境变量:`INSTALL_DIR=目标目录`、`SKIP_SETUP=1`(只铺文件)、`AUTO_EXIT=1`(不暂停)
+- 自动化测试环境变量:`SKIP_WIZARD=1`(不弹向导,默认导数据)、`INSTALL_DIR=目录`、
+  `SKIP_SETUP=1`(只铺文件)、`AUTO_EXIT=1`(不弹结果窗/不 pause)
 - 卸载:安装目录里跑 `uninstall-on-this-pc.ps1`
 
 > ⚠️ 仓库是**公开**的:`config.json` 含登录密码与热点 SSID/密码、`home-wifi-profile.xml` 含
@@ -87,6 +97,8 @@ cd iflytek-sinkhole
 | `make-cert.ps1` / `setup-firewall.ps1` / `register-autostart.ps1` | 单项脚本 |
 | `setup-on-this-pc.ps1` / `uninstall-on-this-pc.ps1` | **一键装机/卸载** |
 | `make-installer.ps1` | 打一键安装包 exe(IExpress,产物 `dist\iflytek-sinkhole-setup.exe`) |
+| `setup-wizard.ps1` | 安装向导(Ask=配置窗,Apply=导数据+应用配置+跑 setup;`-Phase` 两阶段) |
+| `launcher.ps1` | 管理器 GUI 源(编译产物 `中继站管理器.exe`:启停/状态灯/热点/配置对话框) |
 | `start.ps1` / `stop.ps1` | 手动后台启停(按 `--svc-sinkhole` 标记识别进程) |
 | `test-chat.js` | 聊天室双客户端自测 |
 | `test-dhcp.js` | DHCP 全流程自测(本机模拟手机 DISCOVER→OFFER→REQUEST→ACK) |
