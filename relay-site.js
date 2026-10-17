@@ -455,6 +455,61 @@ function listFiles() {
     .sort((a, b) => b.uploadedAt - a.uploadedAt);
 }
 
+/* zip 打包下载(学习机没有 File System Access API → 多文件一次打包成 zip 直接下)
+   纯 Node:手写 zip 容器 + zlib.deflateRaw + 自算 crc32,零第三方依赖 */
+const CRC_T = (() => { const t = new Int32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c; } return t; })();
+function crc32Buf(buf) { let c = -1; for (let i = 0; i < buf.length; i++) c = CRC_T[(c ^ buf[i]) & 0xFF] ^ (c >>> 8); return (c ^ -1) >>> 0; }
+
+function handleZip(req, res) {
+  if (!hasPerm(req, 'download')) return json(res, 403, { error: '当前身份组无下载权限' });
+  const u = new URL(req.url, 'http://x');
+  const ids = String(u.searchParams.get('ids') || '').split(',').map((s) => s.trim()).filter((s) => /^[0-9a-f]{16}$/.test(s)).slice(0, 500);
+  if (!ids.length) return json(res, 400, { error: 'ids 为空' });
+  const list = [];
+  let total = 0;
+  for (const id of ids) {
+    const f = meta.files[id];
+    if (!f) continue;
+    if (f.size > 500 * 1048576) continue; // 单文件>500MB 跳过(内存保护,单独下载即可)
+    if (total + f.size > 2048 * 1048576) break; // 单次包 2GB 封顶
+    if (fs.existsSync(path.join(filesDir, id))) list.push({ id, f });
+  }
+  if (!list.length) return json(res, 404, { error: '没有可打包的文件(单文件超 500MB 请逐个下载)' });
+  const d2 = (n) => String(n).padStart(2, '0');
+  const now = new Date();
+  const zipName = `中继站文件-${now.getFullYear()}${d2(now.getMonth() + 1)}${d2(now.getDate())}-${d2(now.getHours())}${d2(now.getMinutes())}.zip`;
+  res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': disposition(zipName, false), 'cache-control': 'no-store' });
+  const central = [];
+  let offset = 0, downBytes = 0;
+  for (const { id, f } of list) {
+    if (res.destroyed) break;
+    let buf;
+    try { buf = fs.readFileSync(path.join(filesDir, id)); } catch { continue; }
+    const crc = crc32Buf(buf);
+    const comp = zlib.deflateRawSync(buf, { level: 6 });
+    const nb = Buffer.from(f.name.replace(/[\\/:*?"<>|]/g, '_'), 'utf8');
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(0x0800, 6); // bit11=UTF8 文件名
+    lh.writeUInt16LE(8, 8); lh.writeUInt32LE(crc, 14); lh.writeUInt32LE(comp.length, 18); lh.writeUInt32LE(buf.length, 22);
+    lh.writeUInt16LE(nb.length, 26);
+    res.write(lh); res.write(nb); res.write(comp);
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt16LE(0x0800, 8);
+    ch.writeUInt16LE(8, 10); ch.writeUInt32LE(crc, 16); ch.writeUInt32LE(comp.length, 20); ch.writeUInt32LE(buf.length, 24);
+    ch.writeUInt16LE(nb.length, 28); ch.writeUInt32LE(offset, 42);
+    central.push(Buffer.concat([ch, nb]));
+    offset += 30 + nb.length + comp.length;
+    downBytes += buf.length;
+  }
+  const cd = Buffer.concat(central);
+  const eo = Buffer.alloc(22);
+  eo.writeUInt32LE(0x06054b50, 0); eo.writeUInt16LE(central.length, 8); eo.writeUInt16LE(central.length, 10);
+  eo.writeUInt32LE(cd.length, 12); eo.writeUInt32LE(offset, 16);
+  res.write(cd); res.end(eo);
+  if (downBytes) addTraffic(req, 'down', downBytes);
+  log(`[RELAY][ZIP] ${clientIp(req)} 打包下载 ${central.length} 个文件(${(downBytes / 1048576).toFixed(1)}MB)`);
+}
+
 function streamFile(req, res, id, inline) {
   const f = meta.files[id];
   if (!f) return json(res, 404, { error: '文件不存在或已删除' });
@@ -773,7 +828,15 @@ function rewriteBrowseHtml(html, baseUrl, opts) {
     if (/<head[^>]*>/i.test(out)) out = out.replace(/<head[^>]*>/i, (m) => m + opts.inject);
     else out = opts.inject + out;
   }
-  if (opts.banner === false) return out; // 镜像模式不加横幅
+  if (opts.banner === false) return out; // 镜像模式不加横幅(也不注入 shim,门户保持原样)
+  // 运行时 shim:页面 JS 的动态资源请求(fetch/XHR/video src)也走 /p/ 中转
+  {
+    const shim = browseShim(baseUrl);
+    if (shim) {
+      if (/<head[^>]*>/i.test(out)) out = out.replace(/<head[^>]*>/i, (m) => m + shim);
+      else out = shim + out;
+    }
+  }
   // 中转浏览工具条:后退/刷新/回中继/地址栏(浏览器式中转)
   const cur = escHtml(baseUrl);
   const bs = 'font:13px sans-serif;padding:5px 10px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;border-radius:7px;cursor:pointer;text-decoration:none;line-height:1.2;white-space:nowrap';
@@ -812,6 +875,36 @@ function browseErr(res, msg, from) {
 const subCache = new Map(); // url -> {ts, body, type, code}
 const SUB_TTL = 60 * 1000;
 const UA_CHROME = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+/* 注入 /p/ 页面的运行时改写 shim:页面 JS 的 fetch/XHR/媒体 src 全改走 /p/ 中转。
+   解决"页面壳能出但视频/动态数据不出"(SPA 用 JS 动态取资源,静态 HTML 改写覆盖不到)。 */
+function browseShim(baseUrl) {
+  let origin = '';
+  try { origin = new URL(baseUrl).origin; } catch { return ''; }
+  return '<script>(function(){' +
+    'var RAW=' + JSON.stringify(origin) + ';' +
+    'function fix(u){try{' +
+    'if(typeof u!=="string"||!u)return u;' +
+    'if(/^(blob:|data:|about:|javascript:|mailto:|tel:|#|ws:|wss:)/i.test(u))return u;' +
+    'if(u.indexOf("/p/")===0||u.indexOf("/f/")===0||u.indexOf("/api/")===0||u.indexOf("/auth/")===0)return u;' +
+    'var abs=(u.charAt(0)==="/"&&u.charAt(1)!=="/")?(RAW+u):((/^https?:/i.test(u))?u:new URL(u,RAW+"/").href);' +
+    'if(!/^https?:/i.test(abs))return u;' +
+    'return "/p/"+encodeURIComponent(abs);' +
+    '}catch(e){return u}}' +
+    'var _f=window.fetch;' +
+    'if(_f)window.fetch=function(a,b){try{if(typeof a==="string")a=fix(a);else if(a&&typeof a==="object"&&a.href)a=new Request(fix(a.href),a);}catch(e){}' +
+    'return _f.call(this,a,b);};' +
+    'try{var _o=XMLHttpRequest.prototype.open;' +
+    'XMLHttpRequest.prototype.open=function(){try{if(arguments.length>1)arguments[1]=fix(String(arguments[1]));}catch(e){}' +
+    'return _o.apply(this,arguments);};}catch(e){}' +
+    'try{var ms=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,"src");' +
+    'if(ms&&ms.set){var _s=ms.set;Object.defineProperty(HTMLMediaElement.prototype,"src",' +
+    '{get:ms.get,set:function(v){try{v=fix(v);}catch(e){}_s.call(this,v);}});}}catch(e){}' +
+    'try{var _sa=Element.prototype.setAttribute;' +
+    'Element.prototype.setAttribute=function(n,v){try{if(n==="src"||n==="poster")v=fix(String(v));}catch(e){}' +
+    'return _sa.call(this,n,v);};}catch(e){}' +
+    '})();<\/script>';
+}
 
 function cacheSub(url, code, type, body) {
   subCache.set(url, { ts: Date.now(), code, type, body });
@@ -938,9 +1031,13 @@ async function handleBrowse(req, res, rawUrl, modeOpts) {
       return res.end(hit.body);
     }
     const mod = u.protocol === 'https:' ? https : http;
+    // 子资源(XHR/img/media…sec-fetch-dest 非 document)带上 referer=目标自身 → 过反盗链(bilibili 图片/媒体必须)
+    const isSub = /xmlhttprequest|image|media|script|style|font/i.test(req.headers['sec-fetch-dest'] || '');
     const headers = {
       'user-agent': modeOpts && modeOpts.ua ? modeOpts.ua : UA_CHROME,
-      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      accept: isSub && !/document/.test(req.headers.accept || '')
+        ? (req.headers.accept || '*/*')
+        : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
       'accept-language': 'zh-CN,zh;q=0.9,en;q=0.6',
       'sec-fetch-dest': 'document',
       'sec-fetch-mode': 'navigate',
@@ -948,6 +1045,8 @@ async function handleBrowse(req, res, rawUrl, modeOpts) {
       'accept-encoding': 'identity',
       connection: 'close',
     };
+    if (isSub) headers.referer = u.origin + '/';
+    if (isSub && req.headers.range) headers.range = req.headers.range; // 媒体拖动/分段播放透传
     if (method === 'POST') {
       headers['content-type'] = 'application/x-www-form-urlencoded';
       headers['content-length'] = bodyBuf.length;
@@ -962,6 +1061,21 @@ async function handleBrowse(req, res, rawUrl, modeOpts) {
           return doFetch(next, depth + 1);
         }
         const ct = (up.headers['content-type'] || '').toLowerCase();
+        // 音视频/流媒体:直接管道(不缓冲、保留 Range/206 → 播放器拖动、bilibili 分段 m4s 都能工作)
+        if (/^(video\/|audio\/)|mpegurl|mp2t/.test(ct) && !MIRROR) {
+          const h = { 'cache-control': 'no-store' };
+          if (up.headers['content-type']) h['content-type'] = up.headers['content-type'];
+          if (up.headers['content-length']) h['content-length'] = up.headers['content-length'];
+          if (up.headers['content-range']) h['content-range'] = up.headers['content-range'];
+          if (up.headers['accept-ranges']) h['accept-ranges'] = up.headers['accept-ranges'];
+          res.writeHead(up.statusCode || 200, h);
+          const acc = { n: 0 };
+          up.on('data', (c) => { acc.n += c.length; });
+          up.on('end', () => { if (acc.n) addTraffic(req, 'down', acc.n); });
+          up.on('error', () => res.destroy());
+          res.on('close', () => up.destroy());
+          return up.pipe(res);
+        }
         const chunks = [];
         let size = 0;
         const cap = (PR.maxSizeMB || 20) * 1048576;
@@ -982,7 +1096,7 @@ async function handleBrowse(req, res, rawUrl, modeOpts) {
             cacheSub(u.href, up.statusCode || 200, 'text/css; charset=utf-8', rewriteCss(body.toString('utf8'), u.href));
             res.writeHead(up.statusCode || 200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-store' });
             res.end(body.toString('utf8'));
-          } else if (/^(image\/|font\/|application\/font|audio\/|video\/)/.test(ct) && !MIRROR) {
+          } else if (/^(image\/|font\/|application\/font)/.test(ct) && !MIRROR) {
             // 静态子资源:内存缓存提速,降低上游压力;镜像模式不做缓存(保持即时性)
             cacheSub(u.href, up.statusCode || 200, up.headers['content-type'] || 'application/octet-stream', body);
             const h = { 'cache-control': 'no-store' };
@@ -992,6 +1106,8 @@ async function handleBrowse(req, res, rawUrl, modeOpts) {
           } else {
             const h = { 'cache-control': 'no-store' };
             if (up.headers['content-type']) h['content-type'] = up.headers['content-type'];
+            if (up.headers['content-range']) h['content-range'] = up.headers['content-range'];
+            if (up.statusCode === 206) { res.writeHead(206, h); return res.end(body); }
             res.writeHead(up.statusCode || 200, h);
             res.end(body);
           }
@@ -1129,6 +1245,10 @@ const router = (req, res) => {
       return json(res, 200, { offset: off });
     }
     if (p === '/api/upload' && req.method === 'POST') return handleUpload(req, res);
+    if (p === '/api/zip' && req.method === 'GET') {
+      if (!requireAuth(req)) return json(res, 401, { error: '未登录' });
+      return handleZip(req, res);
+    }
     if (p === '/api/files' && req.method === 'GET') {
       if (!requireAuth(req)) return json(res, 401, { error: '未登录' });
       return json(res, 200, listFiles());

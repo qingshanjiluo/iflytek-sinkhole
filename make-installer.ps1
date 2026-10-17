@@ -111,12 +111,34 @@ static class Stub {
 # 写纯 ASCII 源(编码安全),输出 ASCII 名再改中文名(避免 csc 命令行编码问题)
 $stubPath = Join-Path $staging 'launcher-stub.cs'
 [IO.File]::WriteAllText($stubPath, $stubSrc, [Text.Encoding]::ASCII)
-$cscArgs = @('/nologo', '/target:winexe', '/optimize+', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll', '/out:launcher-stub.exe', 'launcher-stub.cs')
+# 内嵌 requireAdministrator 清单 → 双击管理器.exe 直接弹 UAC(开热点/写 Program Files/防火墙都要管理员)
+# 否则用户双击后是普通权限,点「开热点」会静默失败(旧版痛点)
+$manifest = @'
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
+    </application>
+  </compatibility>
+</assembly>
+'@
+$manifestPath = Join-Path $staging 'launcher.manifest'
+[IO.File]::WriteAllText($manifestPath, $manifest, [Text.Encoding]::ASCII)
+$cscArgs = @('/nologo', '/target:winexe', '/optimize+', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll', '/win32manifest:launcher.manifest', '/out:launcher-stub.exe', 'launcher-stub.cs')
 $cp = Start-Process -FilePath $csc -ArgumentList $cscArgs -WorkingDirectory $staging -Wait -PassThru -WindowStyle Hidden
 if ($cp.ExitCode -ne 0 -or -not (Test-Path (Join-Path $staging 'launcher-stub.exe'))) { throw "csc 编译失败 exit=$($cp.ExitCode)" }
 Move-Item (Join-Path $staging 'launcher-stub.exe') (Join-Path $staging ([char]0x4E2D + '继站管理器.exe')) -Force
-Remove-Item $stubPath -Force
-OK '中继站管理器.exe 已编译(WinExe,无控制台闪烁)'
+Remove-Item $stubPath, $manifestPath -Force -EA SilentlyContinue
+OK '中继站管理器.exe 已编译(WinExe + requireAdministrator 清单,双击自动弹 UAC)'
 
 # ---------- 3) 生成 install.cmd(GBK + CRLF;向导两阶段 + 目录重建) ----------
 Step '生成 install.cmd'

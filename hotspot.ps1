@@ -1,9 +1,10 @@
 ﻿# =====================================================================
 #  经典 SoftAP 热点(伪装普通 WiFi):AIC/常规无线网卡免配置开热点
 #  用法(管理员 PowerShell):
-#    .\hotspot.ps1                      启动热点(SSID/密码读 config.json relay.hotspot,缺省 China_Unicom/unicom2026)
+#    .\hotspot.ps1                      启动热点(SSID/密码/网卡读 config.json relay.hotspot)
 #    .\hotspot.ps1 -Stop                关闭热点
 #    .\hotspot.ps1 -Ssid MyWiFi -Key 12345678   手动指定(优先于 config)
+#    .\hotspot.ps1 -Nic 'WLAN(USB)'     指定无线网卡名(内置/USB 任选;优先于 config 的 nic)
 #  说明:
 #  - WPA2-Personal/CCMP,与普通路由器空口协议一致,无"手机热点"特征
 #  - Windows 部分内置"移动热点"页面打不开时的可靠替代(经典 hostednetwork)
@@ -14,18 +15,20 @@
 param(
   [string]$Ssid = '',
   [string]$Key  = '',
+  [string]$Nic  = '',
   [switch]$Stop
 )
 $ErrorActionPreference = 'Continue'
 
-# 优先级: 传参 > config.json relay.hotspot.ssid/key > 内置默认(安装向导写 config,这里自动跟随)
-if (-not $Ssid -or -not $Key) {
+# 优先级: 传参 > config.json relay.hotspot.{ssid,key,nic} > 内置默认(安装向导/管理器写 config,这里自动跟随)
+if (-not $Ssid -or -not $Key -or -not $Nic) {
   try {
     $cfg = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'config.json'), (New-Object System.Text.UTF8Encoding($false))) | ConvertFrom-Json
     $hs = $null
     if ($cfg.relay) { $hs = $cfg.relay.hotspot }
     if (-not $Ssid) { if ($hs -and $hs.ssid) { $Ssid = $hs.ssid } else { $Ssid = 'China_Unicom' } }
     if (-not $Key)  { if ($hs -and $hs.key)  { $Key  = $hs.key }  else { $Key  = 'unicom2026' } }
+    if (-not $Nic)  { if ($hs -and $hs.nic)  { $Nic  = $hs.nic } }
   } catch {
     if (-not $Ssid) { $Ssid = 'China_Unicom' }
     if (-not $Key)  { $Key = 'unicom2026' }
@@ -39,12 +42,23 @@ if ($Stop) {
 }
 
 # 1) 无线网卡与承载网络
-$wlan = Get-NetAdapter | Where-Object { $_.Status -ne 'Disabled' -and ($_.InterfaceDescription -match 'Wi-?Fi|Wireless|WLAN|802\.11|Wireless-AC|AX[0-9]|AX\d+' -or $_.Name -match 'WLAN|Wi-?Fi') } | Select-Object -First 1
+#    指定了 -Nic 就按名字精确选(管理器里选的内置/USB 卡);否则按描述自动挑第一张无线卡
+if ($Nic) {
+  $wlan = Get-NetAdapter -IncludeHidden | Where-Object { $_.Name -eq $Nic } | Select-Object -First 1
+  if (-not $wlan) {
+    Write-Host "找不到名为「$Nic」的网卡,改用自动选择" -ForegroundColor Yellow
+    $Nic = ''
+  }
+}
+if (-not $wlan) {
+  $wlan = Get-NetAdapter | Where-Object { $_.Status -ne 'Disabled' -and ($_.InterfaceDescription -match 'Wi-?Fi|Wireless|WLAN|802\.11|Wireless-AC|AX[0-9]|AX\d+' -or $_.Name -match 'WLAN|Wi-?Fi') } | Select-Object -First 1
+}
 if (-not $wlan) { Write-Host '未找到无线网卡(USB 网卡插好了吗?驱动装了吗?)' -ForegroundColor Red; exit 1 }
+Write-Host "使用无线网卡: $($wlan.Name) [$($wlan.InterfaceDescription)]" -ForegroundColor Cyan
 $drv = netsh wlan show drivers | Out-String
 if ($drv -notmatch '(?m)^\s+Hosted network supported\s*:\s*Yes') {
   Write-Host '该网卡驱动不支持承载网络(HostedNetwork),无法用经典SoftAP方式。' -ForegroundColor Red
-  Write-Host '可改用系统「设置→移动热点」;或换支持 AP 模式的网卡。'
+  Write-Host '可改用系统「设置→移动热点」;或换成支持 AP 模式的网卡(管理器里重新选卡)。'
   exit 1
 }
 

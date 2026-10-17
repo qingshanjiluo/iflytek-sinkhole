@@ -124,6 +124,7 @@ a:hover{border-bottom-color:var(--red)}
   transition:background var(--t-fast)}
 .frow:last-child{border-bottom:none}
 .frow:hover{background:var(--paper)}
+.fpick{flex:none;width:18px;height:18px;accent-color:var(--red);cursor:pointer;margin:0}
 .fext{flex:none;min-width:52px;text-align:center;font:700 10.5px/1 var(--f-mono);letter-spacing:.06em;
   color:var(--red-dark);background:var(--red-soft);border:1px solid #eccfc5;padding:6px 4px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -320,6 +321,7 @@ footer{color:var(--ink-3);font:500 11.5px/2 var(--f-mono);letter-spacing:.04em;t
       <span class="n" id="count"></span>
       <span class="sp"></span>
       <button class="btn sm" id="dirBtn" type="button" title="下载直接写入你选的本地文件夹">下载到:未指定</button>
+      <button class="btn sm" id="zipBtn" type="button" style="display:none" title="勾选多个文件,一次打包成 zip 下载">📦 打包 0</button>
       <button class="btn sm" id="refreshBtn" type="button">刷新</button>
     </div>
     <div id="files"><div class="empty">装载中…</div></div>
@@ -644,9 +646,10 @@ document.addEventListener('drop',e=>{ e.preventDefault();
 function dlUrl(f){ return location.origin+'/f/'+f.id+'?dl='+encodeURIComponent(f.name); }
 function openPreview(f){
   const pv=f.pv; if(!pv)return;
-  if(pv.kind==='image'){ showLightbox(f); return; }
-  if(pv.kind==='text'){ showText(f); return; }
-  showDoc(f); // pdf / epub 走 iframe
+  // 新页面打开(学习机浏览器没有灯箱/弹窗体验,直接跳整页最稳)
+  // 图片/PDF/文本走 /f/:id?inline=1(服务端按 MIME 内联);epub 走服务端读书页
+  const w=window.open(pv.url,'_blank');
+  if(!w) location.href=pv.url;   // 弹窗被拦截 → 当前页跳转兜底
 }
 function showLightbox(f){
   $('lbName').textContent=f.name+' · '+fmtSize(f.size);
@@ -681,8 +684,20 @@ $('lightbox').onclick=e=>{ if(e.target===$('lightbox'))$('lightbox').classList.r
 $('docOv').onclick=e=>{ if(e.target===$('docOv'))$('docOv').classList.remove('on'); };
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ $('lightbox').classList.remove('on'); $('docOv').classList.remove('on'); } });
 
+const sel=new Set(); // 打包勾选(跨 5 秒自动刷新保留)
+function updZipBtn(){ const b=$('zipBtn'); if(!b)return;
+  b.style.display=sel.size?'':'none'; b.textContent='📦 打包 '+sel.size; }
+$('zipBtn').onclick=()=>{
+  if(!sel.size)return;
+  const ids=[...sel];
+  location.href='/api/zip?ids='+encodeURIComponent(ids.join(','));
+  toast('开始打包 '+ids.length+' 个文件,浏览器将自动下载 zip…');
+};
 function makeRow(f){
   const row=document.createElement('div'); row.className='frow';
+  const ck=document.createElement('input'); ck.type='checkbox'; ck.className='fpick'; ck.checked=sel.has(f.id);
+  ck.title='勾选后可「打包下载」';
+  ck.onchange=()=>{ if(ck.checked)sel.add(f.id); else sel.delete(f.id); updZipBtn(); };
   const ext=document.createElement('span'); ext.className='fext '+extClass(f.name); ext.textContent=extLabel(f.name);
   ext.title=f.name;
   const meta=document.createElement('div'); meta.className='fmeta';
@@ -706,13 +721,16 @@ function makeRow(f){
       fetch('/api/files/'+f.id,{method:'DELETE'}).then(r=>r.json()).then(j=>{ toast(j.ok?'已删除':(j.error||'删除失败')); loadFiles(); }); };
     acts.append(del);
   }
-  row.append(ext,meta,acts);
+  row.append(ck,ext,meta,acts);
   return row;
 }
 let lastJson='';
 function loadFiles(){
   fetch('/api/files').then(r=>r.json()).then(list=>{
     const j=JSON.stringify(list); if(j===lastJson)return; lastJson=j;
+    const alive=new Set(list.map(f=>f.id)); let pur=false;
+    sel.forEach(id=>{ if(!alive.has(id)){ sel.delete(id); pur=true; } });
+    if(pur)updZipBtn();
     const totalB=list.reduce((s,f)=>s+f.size,0);
     countEl.textContent=list.length?('共 '+list.length+' 项 · '+fmtSize(totalB)):'';
     filesEl.innerHTML='';

@@ -52,7 +52,7 @@ cd iflytek-sinkhole
 .\setup-on-this-pc.ps1     # 管理员 PowerShell,一条命令部署
 ```
 
-**打一个带安装向导的安装包**(任何 Windows 7/10/11 双击即装):
+**打一个带安装向导的安装包**(Windows 10/11 x64 双击即装;捆绑的 Node 24 不支持 Win7/8):
 
 ```powershell
 .\make-installer.ps1              # 产物 dist\iflytek-sinkhole-setup.exe(捆绑 99MB 便携 Node)
@@ -66,9 +66,10 @@ cd iflytek-sinkhole
 
 - **包内带全配置**:根文件 + `public\*.html` + `certs\iflytek.pfx/*.cer`(证书指纹不变,设备
   已装的信任证书继续有效)+ `data.zip`(storage:文件列表/聊天/会话/身份组/流量,向导可选导入)
-- **中继站管理器.exe**:装完在安装目录,双击出 GUI —— 启动/停止/重启服务、53/80/443/28791
-  状态灯、开/关热点、打开中继站/管理后台、**配置对话框**(拦截域名/上传上限/登录开关/伪装门户/
-  上游DNS/热点默认,保存即写 config.json 并可自动重启)
+- **中继站管理器.exe**(内嵌 requireAdministrator,**双击自动弹 UAC**,开热点/写 Program Files 才不失败):
+  启动/停止/重启服务、53/80/443/28791 状态灯、**无线网卡下拉选择**(内置/USB 任选,选完「保存热点配置」
+  写 config `relay.hotspot.nic`,hotspot.ps1 自动跟随)、热点 SSID/密码、开/关热点、打开中继站/管理后台、
+  **配置对话框**(拦截域名/上传上限/登录开关/伪装门户/上游DNS/热点默认,保存即写 config.json 并可自动重启)
 - 安装包用 Windows 自带 **IExpress** 打包(零第三方依赖):解压会拍平子目录,由 `install.cmd`(GBK+CRLF)
   按扩展名重建目录;管理器 exe 用 .NET Framework 自带 csc 编译的 WinExe 壳(Win10/11 直接可跑)
 - **构建机限制**:SED 必须 GBK(只能在中文 Windows 构建)、构建路径不能含空格
@@ -110,12 +111,14 @@ GET    /                  门户(镜像开启=实时镜像原官网;关闭=中�
 /relay                    中继站后台(门户上点 logo 进入;mirror.door 可改)
 POST   /api/upload        头 x-file-name=<encodeURIComponent(名字)>,body=原始字节
 GET    /api/files         文件列表
-GET    /f/<id>            下载(单段 Range 续传;?inline=1 预览)
+GET    /f/<id>            下载(单段 Range 续传;?inline=1 预览,前端「看图/预览/读书」改新页打开)
+GET    /api/zip?ids=a,b   多文件打包成 zip 一次下载(无 File System Access 的学习机兜底)
 DELETE /api/files/<id>    删除
 GET/PUT /api/note         共享文字便签(≤1MB)
 WS     /ws/chat?name=昵称  聊天室(hello含历史/msg/presence;历史500条持久化)
 POST   /api/chat/clear    清空聊天
-GET/POST /p/<urlencode(URL)>  网页转发浏览(HTML改写链接/CSS url()/重定向跟踪/GBK转码)
+GET/POST /p/<urlencode(URL)>  网页转发浏览(HTML 改写 + **运行时 shim 改写页面 JS 的 fetch/XHR/media src**
+                              + 音视频 Range/206 流式透传 + 反盗链 referer + GBK 转码)
 GET/POST /auth/login       登录(表单 POST→302;`?next=` 回跳,`?e=1` 密码错)
 GET     /auth/logout       登出(清 cookie 回 `/`)
 POST    /api/auth/login    登录(JSON:{user,password,role} → {ok,user,role})
