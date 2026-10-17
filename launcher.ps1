@@ -35,6 +35,15 @@ function Get-HostedState {
   if ($out -match 'Status\s*:\s*Stopped|状态\s*:\s*已停止|停止') { return '已停止' }
   return '不可用'
 }
+function Get-SystemSsid {
+  # 读系统当前配置/广播中的热点 SSID(netsh 明文给 SSID;密码是掩码读不到)
+  try {
+    $out = netsh wlan show hostednetwork 2>&1 | Out-String
+    $m = [regex]::Match($out, 'SSID[^\r\n:：]*[:：]\s*"([^"]+)"')
+    if ($m.Success) { return $m.Groups[1].Value }
+  } catch {}
+  return ''
+}
 function Get-WifiNics {
   # 所有无线网卡(内置+USB),返回 @{Name;Desc;Wifi;Hosted}
   $out = @()
@@ -190,11 +199,25 @@ $hotBox.Controls.Add($btnNicRe)
 $ssidLb = New-Object System.Windows.Forms.Label
 $ssidLb.Text = 'SSID:'; $ssidLb.AutoSize = $true; $ssidLb.Location = '18,96'; $hotBox.Controls.Add($ssidLb)
 $ssidTb = New-Object System.Windows.Forms.TextBox
-$ssidTb.Location = '88,92'; $ssidTb.Size = '150,24'; $hotBox.Controls.Add($ssidTb)
+$ssidTb.Location = '88,92'; $ssidTb.Size = '120,24'; $hotBox.Controls.Add($ssidTb)
 $keyLb = New-Object System.Windows.Forms.Label
-$keyLb.Text = '密码:'; $keyLb.AutoSize = $true; $keyLb.Location = '250,96'; $hotBox.Controls.Add($keyLb)
+$keyLb.Text = '密码:'; $keyLb.AutoSize = $true; $keyLb.Location = '214,96'; $hotBox.Controls.Add($keyLb)
 $keyTb = New-Object System.Windows.Forms.TextBox
-$keyTb.Location = '300,92'; $keyTb.Size = '150,24'; $hotBox.Controls.Add($keyTb)
+$keyTb.Location = '246,92'; $keyTb.Size = '140,24'; $hotBox.Controls.Add($keyTb)
+$btnSysSsid = New-Object System.Windows.Forms.Button
+$btnSysSsid.Text = '读系统'; $btnSysSsid.Location = '392,91'; $btnSysSsid.Size = '64,26'
+$btnSysSsid.Add_Click({
+  $s = Get-SystemSsid
+  if ($s) {
+    $ssidTb.Text = $s
+    $hotInfo.Text = '已同步系统 SSID。密码 Windows 只回掩码(****),读不回——以 config 里的为准'
+    $hotInfo.ForeColor = [System.Drawing.Color]::DimGray
+  } else {
+    $hotInfo.Text = '系统没读到热点 SSID(热点未配置过/无无线卡驱动)'
+    $hotInfo.ForeColor = [System.Drawing.Color]::FromArgb(166, 124, 0)
+  }
+})
+$hotBox.Controls.Add($btnSysSsid)
 $btnHotSave = New-Object System.Windows.Forms.Button
 $btnHotSave.Text = '保存热点配置'; $btnHotSave.Location = '460,91'; $btnHotSave.Size = '106,26'
 $btnHotSave.Add_Click({ Save-HotspotCfg })
@@ -429,8 +452,12 @@ function Init-HotspotFields {
     $ssidTb.Text = [string]$cfg.relay.hotspot.ssid
     $keyTb.Text = [string]$cfg.relay.hotspot.key
   }
+  if (-not $ssidTb.Text) {                    # config 没填 → 自动读系统当前广播的 SSID 兜底
+    $sys = Get-SystemSsid
+    if ($sys) { $ssidTb.Text = $sys }
+  }
   if (-not $ssidTb.Text) { $ssidTb.Text = 'China_Unicom' }
-  if (-not $keyTb.Text) { $keyTb.Text = 'unicom2026' }
+  if (-not $keyTb.Text) { $keyTb.Text = 'unicom2026' }   # 密码系统只回掩码(****),读不回,只能用默认
 }
 
 # 管理员标记
