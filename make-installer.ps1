@@ -191,7 +191,8 @@ if exist "%SRC%node.exe" copy /y "%SRC%node.exe" "%DST%\runtime\" >nul
 if exist "%SRC%data.zip" copy /y "%SRC%data.zip" "%DST%\" >nul
 if exist "%SRC%.gitignore" copy /y "%SRC%.gitignore" "%DST%\" >nul
 for %%f in ("%SRC%*.cmd") do if /i not "%%~nxf"=="install.cmd" copy /y "%%~f" "%DST%\" >nul
-for %%f in ("%SRC%*.exe") do copy /y "%%~f" "%DST%\" >nul
+rem *.exe 只为管理器壳;node.exe 属 runtime(上面第 190 行已单独拷),别让它漏到根目录白占 99MB
+for %%f in ("%SRC%*.exe") do if /i not "%%~nxf"=="node.exe" copy /y "%%~f" "%DST%\" >nul
 if not exist "%DST%\index.js" goto copyfail
 if not exist "%DST%\public\index.html" goto copyfail
 if not exist "%DST%\setup-wizard.ps1" goto copyfail
