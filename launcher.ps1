@@ -8,6 +8,18 @@
 # =====================================================================
 param([switch]$InlineConfig, [string]$AutoScreenshot = '', [string]$ProbeFile = '')
 $ErrorActionPreference = 'Continue'
+# 修 Start-Process 必炸雷:环境里同时存在 NO_PROXY/no_proxy、https_proxy/HTTPS_PROXY 等
+# 大小写双份键时,PS 5.1 给子进程建环境字典直接抛 DuplicateKey → 开热点/开浏览器全部静默失败。
+# 通用去重:按小写分组,同组留第一个,其余摘掉(Windows 环境变量大小写不敏感,子进程无感)。
+try {
+  $seen = @{}
+  $dups = @()
+  foreach ($k in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
+    $lk = ([string]$k).ToLowerInvariant()
+    if ($seen.ContainsKey($lk)) { $dups += [string]$k } else { $seen[$lk] = [string]$k }
+  }
+  foreach ($dup in $dups) { [Environment]::SetEnvironmentVariable($dup, $null, 'Process') }
+} catch {}
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
 Add-Type -AssemblyName System.Drawing | Out-Null
 $root = $PSScriptRoot
@@ -45,12 +57,24 @@ function Get-SystemSsid {
   return ''
 }
 function Get-WifiNics {
-  # 所有无线网卡(内置+USB),返回 @{Name;Desc;Wifi;Hosted}
+  # 真·物理无线网卡(内置+USB)。排除三类撞名假货(提权后 IncludeHidden 会看到它们):
+  #   ① Hyper-V 虚拟卡 vEthernet (WLAN) ② Wi-Fi Direct 本地连接* NN ③ Hosted Network 虚拟AP
+  # 选到②③开热点必失败 → 宁可列表少也不让用户选错。
   $out = @()
-  $adapters = @(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue |
-    Where-Object { $_.Status -ne 'Disabled' -and ($_.InterfaceDescription -match 'Wi-?Fi|Wireless|WLAN|802\.11|Wireless-AC|AX\d+' -or $_.Name -match 'WLAN|Wi-?Fi') })
-  foreach ($a in $adapters) {
-    $out += [pscustomobject]@{ Name = $a.Name; Desc = $a.InterfaceDescription }
+  try {
+    $adapters = @(Get-NetAdapter -IncludeHidden -ErrorAction Stop |
+      Where-Object {
+        $d = [string]$_.InterfaceDescription; $n = [string]$_.Name
+        if ($d -match 'Wi-Fi Direct|Hosted Network|Hyper-V|Virtual Switch|WAN Miniport') { return $false }
+        if ($n -match '^vEthernet|^\u672c\u5730\u8fde\u63a5\*') { return $false }
+        if ($_.Status -eq 'Disabled') { return $false }
+        return ($d -match 'Wi-?Fi|Wireless|WLAN|802\.11|Wireless-AC|AX\d+' -or $n -match '^(WLAN|Wi-?Fi)')
+      })
+    foreach ($a in $adapters) {
+      $out += [pscustomobject]@{ Name = $a.Name; Desc = $a.InterfaceDescription }
+    }
+  } catch {
+    return @()   # Get-NetAdapter 不可用 → 交上层占位提示,绝不让 Items 留空
   }
   return $out
 }
@@ -238,25 +262,34 @@ $hotInfo.Text = ''; $hotInfo.AutoSize = $true; $hotInfo.ForeColor = [System.Draw
 
 # ---------- 热点操作 ----------
 function Load-Nics {
-  $cur = $nicCmb.Text
-  $nicCmb.Items.Clear()
-  $cfg = Read-Cfg
-  $saved = ''
-  if ($cfg -and $cfg.relay -and $cfg.relay.hotspot -and $cfg.relay.hotspot.nic) { $saved = [string]$cfg.relay.hotspot.nic }
-  $nics = Get-WifiNics
-  if (-not $nics -or $nics.Count -eq 0) {
-    $nicCmb.Items.Add('(未检测到无线网卡 —— 插上 USB 无线网卡后点「刷新」)')
-    $nicCmb.SelectedIndex = 0
-    return
+  # 任何一步抛错都不许让 Items 留空(空 = 下拉点开一片空白,像"打不开")
+  try {
+    $cur = $nicCmb.Text
+    $nicCmb.Items.Clear()
+    $cfg = Read-Cfg
+    $saved = ''
+    if ($cfg -and $cfg.relay -and $cfg.relay.hotspot -and $cfg.relay.hotspot.nic) { $saved = [string]$cfg.relay.hotspot.nic }
+    $nics = @(Get-WifiNics)
+    if ($nics.Count -eq 0) {
+      $nicCmb.Items.Add('(未检测到无线网卡 —— 插上 USB 无线网卡后点「刷新」)')
+      $nicCmb.SelectedIndex = 0
+      return
+    }
+    foreach ($n in $nics) { $nicCmb.Items.Add(('{0}  [{1}]' -f $n.Name, $n.Desc)) | Out-Null }
+    $idx = 0
+    if ($cur) { $idx = $nicCmb.Items.IndexOf($cur) }
+    if ($idx -lt 0 -and $saved) {
+      for ($i = 0; $i -lt $nicCmb.Items.Count; $i++) { if ($nicCmb.Items[$i] -like ($saved + '*')) { $idx = $i; break } }
+    }
+    if ($idx -lt 0) { $idx = 0 }
+    $nicCmb.SelectedIndex = $idx
+  } catch {
+    try {
+      $nicCmb.Items.Clear()
+      $nicCmb.Items.Add('(网卡枚举失败: ' + ($_.Exception.Message -replace '[\r\n]', ' ') + ')')
+      $nicCmb.SelectedIndex = 0
+    } catch {}
   }
-  foreach ($n in $nics) { $nicCmb.Items.Add(('{0}  [{1}]' -f $n.Name, $n.Desc)) | Out-Null }
-  $idx = 0
-  if ($cur) { $idx = $nicCmb.Items.IndexOf($cur) }
-  if ($idx -lt 0 -and $saved) {
-    for ($i = 0; $i -lt $nicCmb.Items.Count; $i++) { if ($nicCmb.Items[$i] -like ($saved + '*')) { $idx = $i; break } }
-  }
-  if ($idx -lt 0) { $idx = 0 }
-  $nicCmb.SelectedIndex = $idx
 }
 function Get-SelNic {
   if ($nicCmb.SelectedIndex -lt 0) { return '' }
@@ -302,8 +335,10 @@ function Run-Hotspot([bool]$stop) {
     $p = Start-Process powershell.exe -ArgumentList $arg -PassThru -WindowStyle Hidden `
       -RedirectStandardOutput (Join-Path $logDir 'hotspot.out.log') -RedirectStandardError (Join-Path $logDir 'hotspot.err.log')
     if ($p) { $p.WaitForExit() }
+    if ($ok -and $p -and $p.ExitCode -ne 0) { $ok = $false }   # 子进程非 0 = 脚本自己失败(驱动/卡问题)
   } catch {
     $ok = $false
+    $script:hotErr = $_.Exception.Message                        # 启动调用本身就炸(环境/权限) → 弹真实原因,不许静默
     if ($stop) { netsh wlan stop hostednetwork 2>&1 | Out-Null; $ok = $true }  # 兜底:直接 netsh 关
   }
   Start-Sleep 1
@@ -311,7 +346,10 @@ function Run-Hotspot([bool]$stop) {
   if (-not $ok) {
     $err = ''
     try { $err = (Get-Content (Join-Path $logDir 'hotspot.out.log') -Tail 5 -EA SilentlyContinue) -join "`n" } catch {}
-    [System.Windows.Forms.MessageBox]::Show("开热点失败(详情 logs\hotspot.out.log):`n$err", '热点') | Out-Null
+    if (-not $err -and $script:hotErr) { $err = $script:hotErr }
+    if (-not $err) { $err = '无日志输出(见 logs\hotspot.err.log)' }
+    [System.Windows.Forms.MessageBox]::Show("开热点没成功:`n$err", '热点') | Out-Null
+    $script:hotErr = ''
   }
 }
 

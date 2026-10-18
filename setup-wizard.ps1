@@ -8,6 +8,18 @@
 # =====================================================================
 param([ValidateSet('Ask','Apply')][string]$Phase = 'Ask', [string]$Src = '', [string]$Dst = '')
 $ErrorActionPreference = 'Stop'
+# 修 Start-Process -Redirect* 必炸雷:环境有 NO_PROXY/no_proxy、https_proxy/HTTPS_PROXY
+# 等大小写双份键时,PS 5.1 建子进程环境字典抛 DuplicateKey → setup 日志建不起来 → 安装卡死。
+# 通用去重:按小写分组,同组留第一个,其余摘掉。
+try {
+  $seen = @{}
+  $dups = @()
+  foreach ($k in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
+    $lk = ([string]$k).ToLowerInvariant()
+    if ($seen.ContainsKey($lk)) { $dups += [string]$k } else { $seen[$lk] = [string]$k }
+  }
+  foreach ($dup in $dups) { [Environment]::SetEnvironmentVariable($dup, $null, 'Process') }
+} catch {}
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
 Add-Type -AssemblyName System.Drawing | Out-Null
 $cfgPath = Join-Path $env:TEMP 'iflytek-setup.cfg'
