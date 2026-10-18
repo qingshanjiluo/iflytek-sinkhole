@@ -323,9 +323,10 @@ function Run-Hotspot([bool]$stop) {
     $arg += '-Stop'
   } else {
     $cfg = Read-Cfg
-    $nic = ''
-    if ($cfg -and $cfg.relay -and $cfg.relay.hotspot -and $cfg.relay.hotspot.nic) { $nic = [string]$cfg.relay.hotspot.nic }
-    if (-not $nic) { $nic = Get-SelNic }
+    # 下拉选中是唯一真相(它打开时已被 config 初始化过);
+    # 老 config 里的毒值 nic="vEthernet (WLAN)" 绝不能再压过用户在下拉里选的真卡
+    $nic = Get-SelNic
+    if (-not $nic -and $cfg -and $cfg.relay -and $cfg.relay.hotspot -and $cfg.relay.hotspot.nic) { $nic = [string]$cfg.relay.hotspot.nic }
     if ($nic) { $arg += @('-Nic', ('"{0}"' -f $nic)) }
   }
   $info = if ($stop) { '正在关闭热点…' } else { '正在开热点(可能要 20~60 秒,含跟随 2.4G 信道)' }

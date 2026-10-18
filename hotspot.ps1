@@ -42,24 +42,45 @@ if ($Stop) {
 }
 
 # 1) 无线网卡与承载网络
-#    指定了 -Nic 就按名字精确选(管理器里选的内置/USB 卡);否则按描述自动挑第一张无线卡
+#    指定了 -Nic 就按名字精确选;否则按描述自动挑第一张无线卡。
+#    虚拟卡(Hyper-V vEthernet / Wi-Fi Direct / HostedNetwork 虚拟AP)一律排除——
+#    它们不能承载热点;老 config 里的毒值 nic="vEthernet (WLAN)" 就在这里被拦下回退自动挑卡。
 if ($Nic) {
-  $wlan = Get-NetAdapter -IncludeHidden | Where-Object { $_.Name -eq $Nic } | Select-Object -First 1
-  if (-not $wlan) {
+  $wlan = Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $Nic } | Select-Object -First 1
+  if ($wlan) {
+    $dsc = [string]$wlan.InterfaceDescription; $nm = [string]$wlan.Name
+    if ($dsc -match 'Wi-Fi Direct|Hosted Network|Hyper-V|Virtual Switch|WAN Miniport' -or $nm -match '^vEthernet|^本地连接\*') {
+      Write-Host "网卡「$Nic」是虚拟卡($dsc),不能开热点 → 改用真实无线网卡" -ForegroundColor Yellow
+      $wlan = $null; $Nic = ''
+    }
+  } else {
     Write-Host "找不到名为「$Nic」的网卡,改用自动选择" -ForegroundColor Yellow
     $Nic = ''
   }
 }
 if (-not $wlan) {
-  $wlan = Get-NetAdapter | Where-Object { $_.Status -ne 'Disabled' -and ($_.InterfaceDescription -match 'Wi-?Fi|Wireless|WLAN|802\.11|Wireless-AC|AX[0-9]|AX\d+' -or $_.Name -match 'WLAN|Wi-?Fi') } | Select-Object -First 1
+  # 自动挑卡同样剔虚拟卡(名称撞 WLAN 的 vEthernet (WLAN) 就是这么混进来的)
+  $wlan = Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.Status -ne 'Disabled' -and
+      $_.Name -notmatch '^vEthernet|^本地连接\*' -and
+      $_.InterfaceDescription -notmatch 'Wi-Fi Direct|Hosted Network|Hyper-V|Virtual Switch|WAN Miniport' -and
+      ($_.InterfaceDescription -match 'Wi-?Fi|Wireless|WLAN|802\.11|Wireless-AC|AX[0-9]|AX\d+' -or $_.Name -match '^(WLAN|Wi-?Fi)')
+    } | Select-Object -First 1
 }
 if (-not $wlan) { Write-Host '未找到无线网卡(USB 网卡插好了吗?驱动装了吗?)' -ForegroundColor Red; exit 1 }
 Write-Host "使用无线网卡: $($wlan.Name) [$($wlan.InterfaceDescription)]" -ForegroundColor Cyan
-$drv = netsh wlan show drivers | Out-String
-if ($drv -notmatch '(?m)^\s+Hosted network supported\s*:\s*Yes') {
-  Write-Host '该网卡驱动不支持承载网络(HostedNetwork),无法用经典SoftAP方式。' -ForegroundColor Red
+# 驱动承载网络支持:只在**明确读到 No** 时才硬失败;
+# netsh 输出被隐藏/重定向进程吞掉时(实测存在这种坑)先照常试,让 netsh start 自己报错——绝不误杀好卡
+$drv = (& netsh wlan show drivers 2>&1 | Out-String)
+$mSup = [regex]::Match($drv, 'Hosted network supported\s*:\s*(\S+)')
+if ($mSup.Success -and $mSup.Groups[1].Value -notmatch '^Y') {
+  Write-Host "该网卡驱动不支持承载网络($($mSup.Value.Trim())),无法用经典SoftAP方式。" -ForegroundColor Red
   Write-Host '可改用系统「设置→移动热点」;或换成支持 AP 模式的网卡(管理器里重新选卡)。'
   exit 1
+}
+if (-not $mSup.Success) {
+  Write-Host '没读到 Hosted network supported 行(netsh 输出被吞),先照常尝试;真不支持则 netsh 启动会自己报错' -ForegroundColor Yellow
 }
 
 # 1.5) STA 先连家里 2.4G WiFi(新卡已支持)→ hostednetwork 信道自动跟随,学习机(2.4G-only)才能搜到
