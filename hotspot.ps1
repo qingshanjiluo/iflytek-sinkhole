@@ -5,6 +5,9 @@
 #    .\hotspot.ps1 -Stop                关闭热点
 #    .\hotspot.ps1 -Ssid MyWiFi -Key 12345678   手动指定(优先于 config)
 #    .\hotspot.ps1 -Nic 'WLAN(USB)'     指定无线网卡名(内置/USB 任选;优先于 config 的 nic)
+#    .\hotspot.ps1 -StaSsid '某酒店WiFi'  上联网(开热点前先连的真实 WiFi,2.4G 信道跟随它)
+#                                        不传读 config relay.hotspot.staSsid;都为空=自动挑
+#                                        「已保存 profile 且当前在范围内」的网(出门换网免配置)
 #  说明:
 #  - WPA2-Personal/CCMP,与普通路由器空口协议一致,无"手机热点"特征
 #  - Windows 部分内置"移动热点"页面打不开时的可靠替代(经典 hostednetwork)
@@ -16,24 +19,23 @@ param(
   [string]$Ssid = '',
   [string]$Key  = '',
   [string]$Nic  = '',
+  [string]$StaSsid = '',
+  [string]$StaKey  = '',
   [switch]$Stop
 )
 $ErrorActionPreference = 'Continue'
 
-# 优先级: 传参 > config.json relay.hotspot.{ssid,key,nic} > 内置默认(安装向导/管理器写 config,这里自动跟随)
-if (-not $Ssid -or -not $Key -or -not $Nic) {
-  try {
-    $cfg = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'config.json'), (New-Object System.Text.UTF8Encoding($false))) | ConvertFrom-Json
-    $hs = $null
-    if ($cfg.relay) { $hs = $cfg.relay.hotspot }
-    if (-not $Ssid) { if ($hs -and $hs.ssid) { $Ssid = $hs.ssid } else { $Ssid = 'China_Unicom' } }
-    if (-not $Key)  { if ($hs -and $hs.key)  { $Key  = $hs.key }  else { $Key  = 'unicom2026' } }
-    if (-not $Nic)  { if ($hs -and $hs.nic)  { $Nic  = $hs.nic } }
-  } catch {
-    if (-not $Ssid) { $Ssid = 'China_Unicom' }
-    if (-not $Key)  { $Key = 'unicom2026' }
-  }
-}
+# 优先级: 传参 > config.json relay.hotspot.{ssid,key,nic,staSsid,staKey} > 内置默认/自动
+$hs = $null
+try {
+  $cfg = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'config.json'), (New-Object System.Text.UTF8Encoding($false))) | ConvertFrom-Json
+  if ($cfg.relay) { $hs = $cfg.relay.hotspot }
+} catch {}
+if (-not $Ssid) { if ($hs -and $hs.ssid) { $Ssid = $hs.ssid } else { $Ssid = 'China_Unicom' } }
+if (-not $Key)  { if ($hs -and $hs.key)  { $Key  = $hs.key }  else { $Key  = 'unicom2026' } }
+if (-not $Nic)  { if ($hs -and $hs.nic)  { $Nic  = $hs.nic } }
+if (-not $StaSsid -and $hs -and $hs.staSsid) { $StaSsid = [string]$hs.staSsid }
+if (-not $StaKey  -and $hs -and $hs.staKey)  { $StaKey  = [string]$hs.staKey }
 
 if ($Stop) {
   netsh wlan stop hostednetwork
@@ -83,27 +85,51 @@ if (-not $mSup.Success) {
   Write-Host '没读到 Hosted network supported 行(netsh 输出被吞),先照常尝试;真不支持则 netsh 启动会自己报错' -ForegroundColor Yellow
 }
 
-# 1.5) STA 先连家里 2.4G WiFi(新卡已支持)→ hostednetwork 信道自动跟随,学习机(2.4G-only)才能搜到
-$homeSsid = 'CU_2kyA'
-# 新电脑没有家里 WiFi 配置文件时,用部署包自带的 home-wifi-profile.xml 自动导入(免手输密码)
-if (-not ((netsh wlan show profiles) -match [regex]::Escape($homeSsid))) {
-  $xp = Join-Path $PSScriptRoot 'home-wifi-profile.xml'
-  if (Test-Path $xp) { netsh wlan add profile filename="$xp" user=all 2>$null | Out-Null }
+# 1.5) STA 先连一个真实 WiFi(开热点前的上联网)→ hostednetwork 信道跟随它,学习机(2.4G-only)才搜得到
+#  上联网选择(出了家门口没 CU_2kyA 也要能连):
+#   ① -StaSsid / config relay.hotspot.staSsid 指定(优先)
+#   ② 都为空 → 自动挑「已保存 profile 且当前在信号范围内」的第一个 → 出门换网零配置
+#   ③ 都没有 → 回退老默认 CU_2kyA(家里)
+#  连不上 = 黄字警告继续开热点(上联网只为跟随 2.4G 信道,不阻断热点本身)
+$wifiIf = $wlan.Name   # STA 也用选定的那张卡(默认 WLAN,USB 卡就用 USB 卡)
+$homeSsid = $StaSsid
+$xp = Join-Path $PSScriptRoot 'home-wifi-profile.xml'
+if (-not $homeSsid) {
+  # 自动挑:先让系统扫一遍,「已保存 profile ∩ 当前在范围」按信号取最强
+  $null = netsh wlan scan 2>&1 | Out-Null; Start-Sleep 3
+  $seen = (netsh wlan show networks 2>&1 | Out-String)
+  $profs = @(); foreach ($m in [regex]::Matches((netsh wlan show profiles 2>&1 | Out-String), '(?:All User Profile|所有用户配置文件)\s*:\s*(.+?)\r?$')) { $profs += $m.Groups[1].Value.Trim() }
+  $cand = @()
+  foreach ($m in [regex]::Matches($seen, 'SSID\s+\d+\s*:\s*(.+?)\r?$')) {
+    $s = $m.Groups[1].Value.Trim()
+    if ($s -and ($profs -contains $s) -and $s -ne $Ssid) { $cand += $s }   # 排除自己(开成同名热点)
+  }
+  if ($cand.Count) { $homeSsid = $cand[0]; Write-Host "上联网自动选择: $homeSsid (已保存且在范围内;出门换网不用改配置)" -ForegroundColor Cyan }
+}
+if (-not $homeSsid) {
+  $homeSsid = 'CU_2kyA'
+  if (Test-Path $xp) { netsh wlan add profile filename="$xp" user=all 2>$null | Out-Null }   # 老默认:包内 profile
 }
 $staOk = $false
-$staInfo = netsh wlan show interfaces | Out-String
-if ($staInfo -match 'SSID\s+:\s+' + [regex]::Escape($homeSsid) -and $staInfo -match 'State\s+:\s+connected') {
+$staInfo = netsh wlan show interfaces 2>&1 | Out-String
+if ($staInfo -match 'SSID\s+:\s+' + [regex]::Escape($homeSsid) -and $staInfo -match 'State\s+:\s*connected') {
   $staOk = $true
 } else {
-  netsh wlan connect name="$homeSsid" interface='WLAN' 2>$null | Out-Null
-  for ($i = 0; $i -lt 4; $i++) {                    # 最多等 20s(有线在线,不阻塞太久)
+  if ($StaKey) { $null = netsh wlan add profile name="$homeSsid" key="$StaKey" user=all 2>&1 }   # 新网(酒店/外面):先存密码再连,免开 Windows 设置
+  $conn = netsh wlan connect name="$homeSsid" interface="$wifiIf" 2>&1 | Out-String
+  if ($conn -notmatch 'successfully|成功') { Write-Host "连 $homeSsid 被拒: $($conn.Trim())" -ForegroundColor Yellow }
+  for ($i = 0; $i -lt 12; $i++) {                  # 最多等 60s(冷启动驱动慢/信号弱也扛得住;实测 8s 内成)
     Start-Sleep 5
-    $s = netsh wlan show interfaces | Out-String
-    if ($s -match 'State\s+:\s+connected' -and $s -match [regex]::Escape($homeSsid)) { $staOk = $true; break }
+    $s = netsh wlan show interfaces 2>&1 | Out-String
+    if ($s -match 'State\s+:\s*connected' -and $s -match [regex]::Escape($homeSsid)) { $staOk = $true; break }
   }
 }
 if ($staOk) { Write-Host "STA 已连 $homeSsid,热点将跟随其 2.4G 信道" -ForegroundColor Green }
-else { Write-Host "STA 未连上 $homeSsid,热点可能停在 5GHz(学习机搜不到)——检查家里 WiFi 密码" -ForegroundColor Yellow }
+else {
+  Write-Host "STA 没连上 $homeSsid —— 热点照常开。" -ForegroundColor Yellow
+  Write-Host "  · 在外面:这只是上联网不在/密码不同,换法:管理器里「上联网」下拉重选,或 config 写 relay.hotspot.staSsid" -ForegroundColor Yellow
+  Write-Host "  · 今晚在家:热点大概率仍落在 2.4G 信道(重开热点时会重试跟随)" -ForegroundColor Yellow
+}
 
 # 2) 启动热点(此卡 STA/AP 并发状态机易毛:start 失败报"设备未正常工作"时,
 #    断开 STA、清残留再试一次,实测必成)

@@ -107,7 +107,7 @@ function Open-Admin($page) {
 # ================= 窗体 =================
 $f = New-Object System.Windows.Forms.Form
 $f.Text = '中继站管理器 · iflytek-sinkhole'
-$f.Size = New-Object System.Drawing.Size(640, 660)
+$f.Size = New-Object System.Drawing.Size(640, 710)
 $f.StartPosition = 'CenterScreen'
 $f.FormBorderStyle = 'FixedSingle'
 $f.MaximizeBox = $false
@@ -200,7 +200,7 @@ $navBox.Controls.Add($btnAdm2)
 # ---------- 热点区(含网卡选择) ----------
 $hotBox = New-Object System.Windows.Forms.GroupBox
 $hotBox.Text = '热点 (hostednetwork 伪装 WiFi)'
-$hotBox.Location = '20,300'; $hotBox.Size = '590,150'; $f.Controls.Add($hotBox)
+$hotBox.Location = '20,300'; $hotBox.Size = '590,190'; $f.Controls.Add($hotBox)
 
 $hotDot = New-Object System.Windows.Forms.Label
 $hotDot.Text = '●'; $hotDot.Font = New-Object System.Drawing.Font('Consolas', 16)
@@ -247,18 +247,31 @@ $btnHotSave.Text = '保存热点配置'; $btnHotSave.Location = '460,91'; $btnHo
 $btnHotSave.Add_Click({ Save-HotspotCfg })
 $hotBox.Controls.Add($btnHotSave)
 
+# 上联 WiFi = 开热点前先连的真实网络(热点信道跟着它走)。出门换了地方改这里;留空=自动挑已连过的网
+$staLb = New-Object System.Windows.Forms.Label
+$staLb.Text = '上联:'; $staLb.AutoSize = $true; $staLb.Location = '18,130'; $hotBox.Controls.Add($staLb)
+$staSsidTb = New-Object System.Windows.Forms.TextBox
+$staSsidTb.Location = '88,126'; $staSsidTb.Size = '150,24'; $hotBox.Controls.Add($staSsidTb)
+$staKLb = New-Object System.Windows.Forms.Label
+$staKLb.Text = '密码:'; $staKLb.AutoSize = $true; $staKLb.Location = '244,130'; $hotBox.Controls.Add($staKLb)
+$staKeyTb = New-Object System.Windows.Forms.TextBox
+$staKeyTb.Location = '296,126'; $staKeyTb.Size = '150,24'; $hotBox.Controls.Add($staKeyTb)
+$staHint = New-Object System.Windows.Forms.Label
+$staHint.Text = '留空=自动挑'; $staHint.AutoSize = $true; $staHint.ForeColor = [System.Drawing.Color]::Gray
+$staHint.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 8); $staHint.Location = '456,130'; $hotBox.Controls.Add($staHint)
+
 $btnHot = New-Object System.Windows.Forms.Button
-$btnHot.Text = '开热点'; $btnHot.Location = '18,122'; $btnHot.Size = '96,24'
+$btnHot.Text = '开热点'; $btnHot.Location = '18,158'; $btnHot.Size = '96,24'
 $btnHot.Add_Click({ Run-Hotspot $false })
 $hotBox.Controls.Add($btnHot)
 
 $btnHotStop = New-Object System.Windows.Forms.Button
-$btnHotStop.Text = '关热点'; $btnHotStop.Location = '120,122'; $btnHotStop.Size = '96,24'
+$btnHotStop.Text = '关热点'; $btnHotStop.Location = '120,158'; $btnHotStop.Size = '96,24'
 $btnHotStop.Add_Click({ Run-Hotspot $true })
 $hotBox.Controls.Add($btnHotStop)
 
 $hotInfo = New-Object System.Windows.Forms.Label
-$hotInfo.Text = ''; $hotInfo.AutoSize = $true; $hotInfo.ForeColor = [System.Drawing.Color]::DimGray; $hotInfo.Location = '240,126'; $hotBox.Controls.Add($hotInfo)
+$hotInfo.Text = ''; $hotInfo.AutoSize = $true; $hotInfo.ForeColor = [System.Drawing.Color]::DimGray; $hotInfo.Location = '240,162'; $hotBox.Controls.Add($hotInfo)
 
 # ---------- 热点操作 ----------
 function Load-Nics {
@@ -308,6 +321,9 @@ function Save-HotspotCfg {
   if ($key) { $cfg.relay.hotspot | Add-Member key $key -Force }
   $nic = Get-SelNic
   if ($nic) { $cfg.relay.hotspot | Add-Member nic $nic -Force }
+  $sta = $staSsidTb.Text.Trim()
+  if ($sta) { $cfg.relay.hotspot | Add-Member staSsid $sta -Force } else { $cfg.relay.hotspot | Add-Member staSsid '' -Force }
+  if ($staKeyTb.Text) { $cfg.relay.hotspot | Add-Member staKey $staKeyTb.Text -Force }
   try {
     Write-Cfg $cfg
     [System.Windows.Forms.MessageBox]::Show("已保存(下次「开热点」即用):`nSSID = $ssid`n网卡 = $(if ($nic) { $nic } else { '自动' })", '完成') | Out-Null
@@ -328,6 +344,10 @@ function Run-Hotspot([bool]$stop) {
     $nic = Get-SelNic
     if (-not $nic -and $cfg -and $cfg.relay -and $cfg.relay.hotspot -and $cfg.relay.hotspot.nic) { $nic = [string]$cfg.relay.hotspot.nic }
     if ($nic) { $arg += @('-Nic', ('"{0}"' -f $nic)) }
+    # 上联 WiFi(开热点前先连的真实网络):下拉框文字优先(它初始化时已被 config 填过)
+    $sta = $staSsidTb.Text.Trim()
+    if ($sta) { $arg += @('-StaSsid', ('"{0}"' -f $sta)) }
+    if ($staKeyTb.Text) { $arg += @('-StaKey', ('"{0}"' -f $staKeyTb.Text)) }
   }
   $info = if ($stop) { '正在关闭热点…' } else { '正在开热点(可能要 20~60 秒,含跟随 2.4G 信道)' }
   $old = $hotInfo.Text; $hotInfo.Text = $info; $f.Refresh()
@@ -358,13 +378,13 @@ function Run-Hotspot([bool]$stop) {
 $btnCfg = New-Object System.Windows.Forms.Button
 $btnCfg.Text = '配置(拦截域名 / 上传上限 / 登录开关 / 伪装门户 / 上游DNS)'
 $btnCfg.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9, [System.Drawing.FontStyle]::Bold)
-$btnCfg.Location = '20,464'; $btnCfg.Size = '590,36'
+$btnCfg.Location = '20,506'; $btnCfg.Size = '590,36'
 $btnCfg.Add_Click({ Show-Config })
 $f.Controls.Add($btnCfg)
 
 $tipLb = New-Object System.Windows.Forms.Label
 $tipLb.Text = '状态灯每 4 秒自动刷新 · 改完配置点「重启」生效 · 卸载: uninstall-on-this-pc.ps1'
-$tipLb.AutoSize = $true; $tipLb.ForeColor = [System.Drawing.Color]::Gray; $tipLb.Location = '24,512'; $f.Controls.Add($tipLb)
+$tipLb.AutoSize = $true; $tipLb.ForeColor = [System.Drawing.Color]::Gray; $tipLb.Location = '24,554'; $f.Controls.Add($tipLb)
 
 # ---------- 状态刷新 ----------
 function Refresh-Status {
@@ -490,6 +510,8 @@ function Init-HotspotFields {
   if ($cfg -and $cfg.relay -and $cfg.relay.hotspot) {
     $ssidTb.Text = [string]$cfg.relay.hotspot.ssid
     $keyTb.Text = [string]$cfg.relay.hotspot.key
+    $staSsidTb.Text = [string]$cfg.relay.hotspot.staSsid   # 上联 WiFi(出门换网改这里;空=自动挑)
+    $staKeyTb.Text = [string]$cfg.relay.hotspot.staKey
   }
   if (-not $ssidTb.Text) {                    # config 没填 → 自动读系统当前广播的 SSID 兜底
     $sys = Get-SystemSsid
