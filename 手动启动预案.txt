@@ -1,0 +1,238 @@
+﻿════════════════════════════════════════════════════════════════
+  iflytek-sinkhole 手动启动 & 多重问题应急预案(备用 TXT)
+  版本 v7 · 2026-10-19 · 服务目录旁留一份,出事先翻这份
+════════════════════════════════════════════════════════════════
+
+【怎么用这份文档】
+  第 0 步"只读体检"照抄跑一遍(不动任何东西) → 对照"分诊表"找到症状行
+  → 按编号执行对应预案 → 第 7 步"验证清单"全绿才算修好。
+  所有命令复制粘贴到【管理员 PowerShell】(右键开始菜单 → Windows PowerShell(管理员))。
+
+【本机位置速查】(换过安装目录以实际为准)
+  安装目录:  D:\新建文件夹 (2)
+  开发目录:  G:\皮皮\编程项目\iflytek-sinkhole(源码 + dist\ 安装包)
+  计划任务:  iflytek-sinkhole(服务,开机+网卡变动自动起)
+             sinkhole-keepalive(保活,每 5 分钟,带自愈)
+  配置:      config.json
+  日志:      logs\sinkhole.log(服务) logs\keepalive.log(保活)
+             logs\hotspot.out.log(热点) logs\setup.out.log(装机)
+
+════════════════════════════════════════════════════════════════
+第 0 步 · 只读体检(什么都不动,先看清楚)
+════════════════════════════════════════════════════════════════
+# 0.1 有几个服务实例?——健康值 = 恰好 1 个
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+  Where-Object { $_.CommandLine -like '*--svc-sinkhole*' } |
+  Select-Object ProcessId, CreationDate
+
+# 0.2 端口谁在听——80/443/53/28791 各 1 个;28792/28793 出现 = 多实例打架
+foreach ($p in 53,80,443,28791,28792,28793) {
+  $o = @(Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue)
+  if ($o) { "port ${p}: PID " + (($o | ForEach-Object OwningProcess | Select-Object -Unique) -join ',') }
+}
+
+# 0.3 探活——这两条秒回 = 服务活的;超时 = 单实例卡死
+try { "api=" + (Invoke-WebRequest 'http://127.0.0.1:28791/api/info' -UseBasicParsing -TimeoutSec 5).StatusCode }
+catch { "28791 无响应(超时/未起)" }
+try { Resolve-DnsName iflytek.com -Server 127.0.0.1 -Type A -QuickTimeout | Out-Null; "DNS 53=通" }
+catch { "DNS 53 不通" }
+
+# 0.4 任务指向哪个目录(装过多次会漂)
+(schtasks /query /tn iflytek-sinkhole /xml) -match '<Command>|<Arguments>'
+
+# 0.5 最近日志
+Get-Content "$PWD\logs\sinkhole.log" -Tail 30
+Get-Content "$PWD\logs\keepalive.log" -Tail 10
+
+════════════════════════════════════════════════════════════════
+分诊表(症状 → 大概率原因 → 去第几步)
+════════════════════════════════════════════════════════════════
+设备打不开 iflytek.com                    → 端口没起/多实例/任务指错目录 → 1 → 2 → 4/5
+中继站能进,但 /p/ 网页转发超时            → 多实例残留(旧代码占 28791)  → 第 1 步
+/api/info 超时,但 53 还在 LISTEN          → 单实例事件循环卡死          → 第 1 步
+28792 或 28793 有监听                     → 多实例打架(端口避让切栈)    → 第 1 步
+日志出现"端口 28791 被占用,避让到…"      → 同上,有残留实例            → 第 1 步
+53 被外部程序占                           → 第三方 DNS/代理             → 第 4 步
+80/443 被占(IIS 等)                       → 设备走域名进不去            → 第 5 步
+热点开不了/报"不支持承载网络"             → 虚拟卡毒值/驱动             → 第 6 步
+在外面连不上 CU_2kyA                      → 上联换网,配置即可          → 第 6 步
+管理器按钮点了没反应                       → NO_PROXY 环境雷             → 第 7 步
+开机后前几分钟服务不响应                   → Defender 冷扫描(正常)       → 等 5~8 分钟
+
+════════════════════════════════════════════════════════════════
+第 1 步 · 【万能起手】单实例收敛(多实例/卡死/避让 都从这开始)
+════════════════════════════════════════════════════════════════
+# 1.1 收掉所有 --svc-sinkhole 实例(含卡死的、避让到 28792+ 的)
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+  Where-Object { $_.CommandLine -like '*--svc-sinkhole*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+Start-Sleep 2
+
+# 1.2 先停任务再起(必须"全杀完再跑",边跑边杀会又造双实例)
+schtasks /end /tn iflytek-sinkhole
+Start-Sleep 1
+schtasks /run /tn iflytek-sinkhole
+
+# 1.3 等就绪(冷启动 Defender 扫描期 5~8 分钟)
+1..60 | ForEach-Object {
+  Start-Sleep 5
+  try { $r = Invoke-WebRequest 'http://127.0.0.1:28791/api/info' -UseBasicParsing -TimeoutSec 4
+        if ($r.StatusCode -eq 200) { "OK 已就绪($([int]($_*5)) 秒)"; break } } catch {}
+}
+
+# 1.4 复查:实例必须=1,28792/28793 必须空
+(Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+  Where-Object { $_.CommandLine -like '*--svc-sinkhole*' }).Count
+
+════════════════════════════════════════════════════════════════
+第 2 步 · 任务指向的目录不对(装过多次会指向旧目录)
+════════════════════════════════════════════════════════════════
+# 2.1 先看现在指向哪(第 0.4 步);要换成哪个目录,就进那个目录重新注册:
+cd 'D:\新建文件夹 (2)'          # ← 换成你要的服务目录
+powershell -ExecutionPolicy Bypass -File .\register-autostart.ps1
+
+# 2.2 核对已改
+(schtasks /query /tn iflytek-sinkhole /xml) -match '<Command>|<Arguments>'
+
+# 2.3 然后回第 1 步收敛重启
+
+════════════════════════════════════════════════════════════════
+第 3 步 · 开机自启/保活失效排查(计划任务本身坏了)
+════════════════════════════════════════════════════════════════
+schtasks /query /tn iflytek-sinkhole /fo LIST          # 状态/上次结果
+schtasks /query /tn sinkhole-keepalive /fo LIST         # 保活任务(应每天在跑)
+# 任务丢失 → 重新注册(回第 2.1 步);LastTaskResult 非 0 → 看 sinkhole.log 尾部
+# 保活自愈记录在 keepalive.log:"多实例打架/53 无应答 → 已清实例并重启任务"
+
+════════════════════════════════════════════════════════════════
+第 4 步 · 53 被外部程序占用(DNS 端口不可替代,必须腾出来)
+════════════════════════════════════════════════════════════════
+netstat -ano | findstr ":53 "               # 找 LISTENING 的 PID
+Get-Process -Id <PID>                       # 是谁
+# 常见:第三方 DNS/代理软件 → 停掉它或卸载;
+#      ICS 的 DNS 代理(SharedAccess)→ setup 已自动关 DnsProxyEnabled,可再核:
+(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters').DnsProxyEnabled
+# 确认是外来软件才杀: taskkill /PID <PID> /F
+# 系统组件(dnscache 等)别杀;腾出来后回第 1 步
+# 注意:设备只查 53,53 不通 = 拦截失效,80 再好也没用
+
+════════════════════════════════════════════════════════════════
+第 5 步 · 80/443 被占(IIS/http.sys/第三方 web)
+════════════════════════════════════════════════════════════════
+netstat -ano | findstr ":80 " | findstr LISTENING
+Get-Process -Id <PID>
+# IIS → 管理员: net stop was /y     (连带停 W3SVC)
+# 其它第三方 web → 停它;都不想动 → 中继站不受影响,
+# 本机/设备可用直连备用入口: http://<本机IP>:28791/relay
+# (设备需手动把 DNS 指向本机才能解析 <本机IP>;能改路由器最好)
+# 修完回第 1 步
+
+════════════════════════════════════════════════════════════════
+第 6 步 · 热点问题(开不了/虚拟卡/换了外面的网)
+════════════════════════════════════════════════════════════════
+# 6.1 手动开热点(直接跑,读 config 里的 SSID/密码/网卡/上联)
+cd 'D:\新建文件夹 (2)'
+powershell -ExecutionPolicy Bypass -File .\hotspot.ps1
+
+# 6.2 常用变体
+powershell -ExecutionPolicy Bypass -File .\hotspot.ps1 -Nic "WLAN"          # 指定真卡
+powershell -ExecutionPolicy Bypass -File .\hotspot.ps1 -StaSsid "酒店WiFi" -StaKey "密码"   # 换上联网
+powershell -ExecutionPolicy Bypass -File .\hotspot.ps1 -Stop                # 关热点
+
+# 6.3 看结果(第一行"使用无线网卡:"必须是真卡;Status:Started 即成功)
+netsh wlan show hostednetwork
+Get-Content .\logs\hotspot.out.log -Tail 20
+
+# 6.4 症状对照:
+#  · 第一行显示 "vEthernet (WLAN)" = config 毒值(虚拟卡) → 记事本打开 config.json,
+#    把 relay.hotspot.nic 改成 ""(空) 再跑;或 -Nic "WLAN" 强制指定
+#  · 提示"驱动不支持承载网络" = 选中的卡真的不支持 → 换支持 AP 的 USB 网卡
+#  · "STA 没连上 xxx" = 只是上联(信道跟随)没成,热点照常开,不阻断;
+#    在外面换网见 6.2 的 -StaSsid;上联留空 = 自动挑已存且在信号内的网
+#  · 热点起来了但学习机搜不到 5G → 让上联落在 2.4G 网,或换 2.4G 档 USB 网卡
+
+════════════════════════════════════════════════════════════════
+第 7 步 · 管理器按钮点了没反应(NO_PROXY 环境雷,已知坑)
+════════════════════════════════════════════════════════════════
+# 病因:环境里 NO_PROXY/no_proxy、HTTPS_PROXY/https_proxy 等"大小写双键"同时存在
+# → PowerShell 5.1 给子进程建环境字典必抛 DuplicateKey → Start-Process -Redirect* 全炸
+# (新管理器已内置去重;若你从被污染的终端手动跑脚本会撞)验证+临时修复:
+$seen=@{}; $dups=@()
+foreach ($k in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
+  $lk = ([string]$k).ToLowerInvariant()
+  if ($seen.ContainsKey($lk)) { $dups += [string]$k } else { $seen[$lk] = [string]$k }
+}
+foreach ($d in $dups) { [Environment]::SetEnvironmentVariable($d, $null, 'Process') }
+"已去重: $($dups -join ',')"    # 之后同一窗口里 Start-Process -Redirect* 即恢复
+# 从桌面双击 管理器.exe 启动的不受影响(exe 里已自带此修复)
+
+════════════════════════════════════════════════════════════════
+第 8 步 · 验证清单(全绿 = 修好了)
+════════════════════════════════════════════════════════════════
+# 8.1 实例 = 1
+"实例=" + (Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+  Where-Object { $_.CommandLine -like '*--svc-sinkhole*' }).Count + " (须=1)"
+
+# 8.2 API 200
+try { "api=" + (Invoke-WebRequest 'http://127.0.0.1:28791/api/info' -UseBasicParsing -TimeoutSec 5).StatusCode }
+catch { "api=超时" }
+
+# 8.3 DNS 通(设备靠它)
+try { Resolve-DnsName iflytek.com -Server 127.0.0.1 -QuickTimeout | Out-Null; "DNS=通" } catch { "DNS=不通" }
+
+# 8.4 端口齐(53/80/443/28791;28792/28793 应无)
+foreach ($p in 53,80,443,28791) {
+  $l = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue
+  "port ${p}: " + $(if ($l) { 'OK' } else { 'MISSING' })
+}
+"28792/28793 应为 0: " + @(Get-NetTCPConnection -LocalPort 28792,28793 -State Listen -EA SilentlyContinue).Count
+
+# 8.5 热点(可选)
+(netsh wlan show hostednetwork | Out-String) -match 'Status\s*:\s*Started'
+
+# 8.6 设备端最终验证(必须做)
+手机/学习机 连热点 → 浏览器开 http://iflytek.com → 看到伪装门户 → 点左上角 logo → 中继站登录页
+
+════════════════════════════════════════════════════════════════
+附 A · 手动前台启动(调试用,不走计划任务)
+════════════════════════════════════════════════════════════════
+cd 'D:\新建文件夹 (2)'
+.\runtime\node.exe .\index.js
+# 日志里依次出现:
+#   [RELAY] 中继站已启动 http://127.0.0.1:28791
+#   [DNS] UDP :53 已监听
+#   [WEB] HTTP :80 已监听 / HTTPS :443 已监听
+# = 全部起来。Ctrl+C 即停。
+# 注意:前台模式没有保活监护;修完务必回第 1 步恢复计划任务实例。
+
+# (备用)程序目录直接前台跑、端口全默认(不推荐,只应急):
+# .\runtime\node.exe index.js
+
+════════════════════════════════════════════════════════════════
+附 B · 日志怎么读(三行就能定位大问题)
+════════════════════════════════════════════════════════════════
+sinkhole.log
+  "===== sinkhole 服务启动 ====="        = 启动点(多行 = 多次启动,数一数)
+  "[RELAY] 端口 28791 被占用,避让到 xx" = 多实例残留嫌疑 → 第 1 步
+  "[DNS] UDP :53 精确绑定 x4~8"         = DNS 正常标志
+  "[WEB] HTTP :80 已监听"               = 反代正常标志
+  "[WEB] ...EADDRINUSE..."              = 80/443 被占 → 第 5 步
+keepalive.log
+  "多实例打架(N 个…)/单实例 53 无应答 → 已清实例并重启任务" = 自愈动作已执行
+hotspot.out.log
+  第 1 行 "使用无线网卡: 名字 [描述]"   = 真相行(是 vEthernet = 虚拟卡毒值)
+
+════════════════════════════════════════════════════════════════
+附 C · 危险动作红线(做之前想清楚)
+════════════════════════════════════════════════════════════════
+· 杀 node 只杀带 --svc-sinkhole 标记的;别用宽匹配(会误杀编辑器/浏览器)
+· 杀服务实例后必须"schtasks /end → /run"成对执行,否则任务树里残留的
+  旧实例继续跑 = 又造双实例(端口避让会把栈切开,一半功能全哑)
+· 80/443 占用进程先 Get-Process 看清楚再动手,系统组件别乱杀
+· 改 config.json 用记事本(UTF-8),改完保存 → 管理器点[重启]才生效
+· 服务在给设备服务时,别反复重启;确需重启先在群里说一声
+
+════════════════════════════════════════════════════════════════
+一句话总纲:设备打不开 = 先 0 步体检(实例数+端口+探活)
+→ 异常一律先"第 1 步单实例收敛" → 还不行按分诊表走 → 第 8 步全绿收工
+════════════════════════════════════════════════════════════════
