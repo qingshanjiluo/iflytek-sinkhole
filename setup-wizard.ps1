@@ -30,7 +30,20 @@ function Read-JsonUtf8($p) {
   try { return ([IO.File]::ReadAllText($p, (New-Object System.Text.UTF8Encoding($false))) | ConvertFrom-Json) } catch { return $null }
 }
 function Write-JsonUtf8($p, $obj) {
-  [IO.File]::WriteAllText($p, ($obj | ConvertTo-Json -Depth 12), (New-Object System.Text.UTF8Encoding($false)))
+  # ConvertTo-Json 会把中文转 \uXXXX → 反转义回真中文(保 _说明 注释可读);原子写防半截损坏
+  $json = $obj | ConvertTo-Json -Depth 12
+  $rx = [regex]'(?<!\\)\\u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\)\\u([0-9a-fA-F]{4})'
+  $json = $rx.Replace($json, {
+    param($m)
+    try {
+      if ($m.Groups[3].Success) { return [string][char]::ConvertFromUtf32([Convert]::ToInt32($m.Groups[3].Value, 16)) }
+      $hi = [Convert]::ToInt32($m.Groups[1].Value, 16); $lo = [Convert]::ToInt32($m.Groups[2].Value, 16)
+      return [string][char]::ConvertFromUtf32(0x10000 + (($hi - 0xD800) -shl 10) + ($lo - 0xDC00))
+    } catch { return $m.Value }
+  })
+  $tmp = $p + '.tmp'
+  [IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding($false)))
+  Move-Item $tmp $p -Force
 }
 function Read-Cfg {
   $h = @{}

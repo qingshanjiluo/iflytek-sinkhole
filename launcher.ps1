@@ -29,7 +29,24 @@ $u8 = New-Object System.Text.UTF8Encoding($false)
 function Read-Cfg {
   try { return ([IO.File]::ReadAllText($cfgFile, $u8) | ConvertFrom-Json) } catch { return $null }
 }
-function Write-Cfg($cfg) { [IO.File]::WriteAllText($cfgFile, ($cfg | ConvertTo-Json -Depth 12), $u8) }
+# 保存三防:①原子写(tmp+rename,写一半断电不再毁 config) ②保留 .bak(损坏可回滚)
+# ③ConvertTo-Json 会把中文转 \uXXXX(_说明注释变乱码)→ 反转义回真中文(含代理对)
+function Write-Cfg($cfg) {
+  $json = $cfg | ConvertTo-Json -Depth 12
+  $rx = [regex]'(?<!\\)\\u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\)\\u([0-9a-fA-F]{4})'
+  $json = $rx.Replace($json, {
+    param($m)
+    try {
+      if ($m.Groups[3].Success) { return [string][char]::ConvertFromUtf32([Convert]::ToInt32($m.Groups[3].Value, 16)) }
+      $hi = [Convert]::ToInt32($m.Groups[1].Value, 16); $lo = [Convert]::ToInt32($m.Groups[2].Value, 16)
+      return [string][char]::ConvertFromUtf32(0x10000 + (($hi - 0xD800) -shl 10) + ($lo - 0xDC00))
+    } catch { return $m.Value }
+  })
+  $tmp = $cfgFile + '.tmp'
+  [IO.File]::WriteAllText($tmp, $json, $u8)
+  if (Test-Path $cfgFile) { try { Copy-Item $cfgFile ($cfgFile + '.bak') -Force } catch {} }
+  Move-Item $tmp $cfgFile -Force
+}
 
 # ---------- 状态查询 ----------
 function Get-SvcProcs {
@@ -90,17 +107,27 @@ function Stop-Svc {
   Get-SvcProcs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 function Open-Page($url) {
-  # 浏览器被占用/无默认浏览器时兜底 Edge
-  try { Start-Process $url } catch {
-    try { Start-Process msedge.exe -ArgumentList ('"{0}"' -f $url) } catch {
-      try { Start-Process 'cmd.exe' -ArgumentList ('/c start "" "{0}"' -f $url) } catch {
-        [System.Windows.Forms.MessageBox]::Show("打不开浏览器,请手动访问:`n$url", '提示') | Out-Null
-      }
-    }
-  }
+  # ⚠ 提权进程直接 Start-Process <URL> 会拉起"管理员浏览器";
+  # Chrome/Edge 已有普通实例时**静默拒绝第二实例** = 用户点按钮毫无反应。
+  # 正确姿势:先走 explorer.exe(非提权壳,把 URL 交回正常浏览器),再逐级兜底。
+  try { Start-Process explorer.exe -ArgumentList $url; return } catch {}
+  try { Start-Process $url; return } catch {}
+  try { Start-Process cmd.exe -ArgumentList @('/c', 'start', '""', $url) -WindowStyle Hidden; return } catch {}
+  [System.Windows.Forms.MessageBox]::Show("打不开浏览器,手动访问:`n$url", '提示') | Out-Null
+}
+function Test-SvcAlive {
+  # 端口在监听 ≠ 活着(单实例事件循环卡死时端口仍绿)——真发一次请求才算
+  try { $r = Invoke-WebRequest 'http://127.0.0.1:28791/api/info' -UseBasicParsing -TimeoutSec 3; return ($r.StatusCode -eq 200) } catch { return $false }
 }
 function Open-Admin($page) {
-  if (-not (Get-PortListen 80)) { Start-Svc }   # 反代没起,80 不通 → 拉起服务
+  if (-not (Get-PortListen 80)) { Start-Svc }   # 反代没起 → 拉起
+  # 拉起后轮询等就绪(冷启动 Defender 扫描期可达数分钟,这里最多等 8 秒,不成就给提示)
+  for ($i = 0; $i -lt 8; $i++) { if (Test-SvcAlive) { break }; Start-Sleep 1 }
+  if (-not (Test-SvcAlive)) {
+    [System.Windows.Forms.MessageBox]::Show(
+      "服务无响应(端口在但 API 不回 = 可能卡死,或刚启动仍在 Defender 扫描中)。`n`n修复:点[重启];再不行等 keep-alive 5 分钟自动收敛,或看「手动启动预案.txt」第 1 步。", '中继站') | Out-Null
+    return
+  }
   Open-Page ('http://iflytek.com' + $page)
 }
 
@@ -349,27 +376,19 @@ function Run-Hotspot([bool]$stop) {
     if ($sta) { $arg += @('-StaSsid', ('"{0}"' -f $sta)) }
     if ($staKeyTb.Text) { $arg += @('-StaKey', ('"{0}"' -f $staKeyTb.Text)) }
   }
-  $info = if ($stop) { '正在关闭热点…' } else { '正在开热点(可能要 20~60 秒,含跟随 2.4G 信道)' }
-  $old = $hotInfo.Text; $hotInfo.Text = $info; $f.Refresh()
+  $info = if ($stop) { '正在关闭热点…' } else { '正在开热点(可要 1 分钟,含跟随 2.4G 信道)…' }
+  $hotInfo.Text = $info; $btnHot.Enabled = $false; $btnHotStop.Enabled = $false; $f.Refresh()
   try {
-    $ok = $true
+    # 异步跑:绝不在 UI 线程 WaitForExit(旧版同步等待 = 开热点时整个管理器假死 60~90 秒,
+    # 表现为"点开热点窗口就不动了/像打不开")
     $p = Start-Process powershell.exe -ArgumentList $arg -PassThru -WindowStyle Hidden `
       -RedirectStandardOutput (Join-Path $logDir 'hotspot.out.log') -RedirectStandardError (Join-Path $logDir 'hotspot.err.log')
-    if ($p) { $p.WaitForExit() }
-    if ($ok -and $p -and $p.ExitCode -ne 0) { $ok = $false }   # 子进程非 0 = 脚本自己失败(驱动/卡问题)
+    $script:hotProc = $p
   } catch {
-    $ok = $false
-    $script:hotErr = $_.Exception.Message                        # 启动调用本身就炸(环境/权限) → 弹真实原因,不许静默
-    if ($stop) { netsh wlan stop hostednetwork 2>&1 | Out-Null; $ok = $true }  # 兜底:直接 netsh 关
-  }
-  Start-Sleep 1
-  Refresh-Status
-  if (-not $ok) {
-    $err = ''
-    try { $err = (Get-Content (Join-Path $logDir 'hotspot.out.log') -Tail 5 -EA SilentlyContinue) -join "`n" } catch {}
-    if (-not $err -and $script:hotErr) { $err = $script:hotErr }
-    if (-not $err) { $err = '无日志输出(见 logs\hotspot.err.log)' }
-    [System.Windows.Forms.MessageBox]::Show("开热点没成功:`n$err", '热点') | Out-Null
+    $script:hotProc = $null
+    $script:hotErr = $_.Exception.Message                        # 启动调用就炸(环境/权限) → 报真实原因
+    if ($stop) { netsh wlan stop hostednetwork 2>&1 | Out-Null; Refresh-Status }  # 兜底:直接 netsh 关
+    [System.Windows.Forms.MessageBox]::Show("热点命令起不来:`n$($_.Exception.Message)", '热点') | Out-Null
     $script:hotErr = ''
   }
 }
@@ -388,6 +407,23 @@ $tipLb.AutoSize = $true; $tipLb.ForeColor = [System.Drawing.Color]::Gray; $tipLb
 
 # ---------- 状态刷新 ----------
 function Refresh-Status {
+  # 异步热点子进程收尾(每 4s 轮询一次):退出码非 0 → 弹真实日志,不许静默
+  $hp = $script:hotProc
+  if ($hp) {
+    try { if (-not $hp.HasExited) { $script:hotDone = $false } } catch { $script:hotProc = $null; $hp = $null }
+    if ($hp) {
+      try { if ($hp.HasExited -and -not $script:hotDone) {
+        $script:hotDone = $true
+        $ec = -1; try { $ec = $hp.ExitCode } catch {}
+        if ($ec -ne 0) {
+          $err = ''
+          try { $err = (Get-Content (Join-Path $root 'logs\hotspot.out.log') -Tail 6 -EA SilentlyContinue) -join "`n" } catch {}
+          if (-not $err) { $err = "热点进程 exit=$ec(无日志,见 logs\hotspot.err.log)" }
+          [System.Windows.Forms.MessageBox]::Show("热点没成功:`n$err", '热点') | Out-Null
+        }
+      } } catch {}
+    }
+  }
   $procs = Get-SvcProcs
   $running = $procs.Count -gt 0
   if ($running) {
@@ -483,6 +519,19 @@ function Show-Config {
       $cfg.relay.mirror.enabled = [bool]$n5.Checked
       $up = @($n6.Text -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
       if ($up.Count) { $cfg.upstreamDNS = $up }
+      # 防陈旧覆盖:绝不把"打开对话框时的旧副本"整体回写——那一刻起
+      # 管理员可能已在 /admin 改过 relay.auth.roles/配额。保存时重读现盘,
+      # 只把对话框管的字段刷进去,auth/relay 其余字段一律保留现值。
+      $fresh = Read-Cfg
+      if ($fresh) {
+        $fresh.sinkholeDomain = $cfg.sinkholeDomain
+        $fresh.blockSubdomains = $cfg.blockSubdomains
+        $fresh.relay.maxUploadMB = $cfg.relay.maxUploadMB
+        $fresh.relay.auth.enabled = $cfg.relay.auth.enabled
+        $fresh.relay.mirror.enabled = $cfg.relay.mirror.enabled
+        $fresh.upstreamDNS = $cfg.upstreamDNS
+        $cfg = $fresh
+      }
       Write-Cfg $cfg
       if ($n8.Checked) { Stop-Svc; Start-Sleep 1; [void](Start-Svc) }
       [System.Windows.Forms.MessageBox]::Show('已保存' + $(if ($n8.Checked) { ',服务重启中(状态灯稍后刷新)' } else { ' (未重启,手动点「重启」生效)' }), '完成') | Out-Null

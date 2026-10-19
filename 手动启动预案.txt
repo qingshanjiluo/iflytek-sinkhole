@@ -194,6 +194,28 @@ foreach ($p in 53,80,443,28791) {
 手机/学习机 连热点 → 浏览器开 http://iflytek.com → 看到伪装门户 → 点左上角 logo → 中继站登录页
 
 ════════════════════════════════════════════════════════════════
+第 9 步 · 配置类故障(config.json 乱码/损坏/保存没生效)
+════════════════════════════════════════════════════════════════
+症状A:config.json 里中文注释全是 "\u8bf4\u660e" 这种乱码
+  · 老版保存(ConvertTo-Json 默认转义)造成的;**JSON 仍有效,服务不受影响**
+  · 新版管理器已保存时自动反转义回中文;想立刻修:用记事本打开 config.json,
+    原样不动直接用新版管理器「配置→保存」一次即恢复可读
+症状B:config.json 损坏,服务起不来(JSON.parse 报错)
+  · 新版 index.js 自动回退 config.json.bak(管理器每次保存前自动留 .bak),
+    日志 logs\sinkhole.log 会写"[WARN] 已回退 config.json.bak"
+  · .bak 也坏 → git checkout config.json(源码目录) 或重跑安装包(向导"导入原机数据")
+症状C:在管理器"配置"窗口开着期间,又去 /admin 改了身份组,点保存后改动丢了
+  · 老版 bug(整个旧副本回写);新版保存前**重新读盘**,只刷新对话框里的字段,
+    auth.roles/流量等其它改动一律保留
+症状D:断电/强杀后 JSON 只剩半截
+  · 已全部改原子写(tmp+rename):config/meta/roles/chat/traffic/sessions 六处;
+    留下的 *.tmp 残留文件可直接删,真文件永远完整
+判断三连:
+  Get-Content .\config.json -Raw | ConvertFrom-Json | Out-Null; "JSON=OK"   # 报错=损坏
+  Get-ChildItem .\*.tmp,.\storage\*.tmp -EA SilentlyContinue                   # 有残留=上次非正常结束
+  Get-Content .\logs\sinkhole.log -Tail 15                                    # 找 FATAL/WARN 回退线索
+
+════════════════════════════════════════════════════════════════
 附 A · 手动前台启动(调试用,不走计划任务)
 ════════════════════════════════════════════════════════════════
 cd 'D:\新建文件夹 (2)'

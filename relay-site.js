@@ -68,11 +68,16 @@ function loadMeta() {
 }
 
 let saveTimer = null;
+/* 原子写盘(tmp+rename):写一半断电/被杀不再把 meta/roles/chat/traffic/config 写成半截损坏文件
+   (损坏 = 服务启动 JSON.parse 直接崩,复杂环境真雷)。同盘 rename,失败回退直接写。 */
+function writeFileAtomic(file, data) {
+  try { const tmp = file + '.tmp'; fs.writeFileSync(tmp, data); try { fs.renameSync(tmp, file); } catch { fs.writeFileSync(file, data); fs.unlinkSync(tmp); } return true; }
+  catch (e) { try { log(`[RELAY] 写 ${path.basename(file)} 失败: ${e.message}`); } catch {} return false; }
+}
 function saveMeta(now) {
   const doWrite = () => {
     saveTimer = null;
-    try { fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2)); }
-    catch (e) { log(`[RELAY] 写 meta.json 失败: ${e.message}`); }
+    writeFileAtomic(metaPath, JSON.stringify(meta, null, 2));
   };
   if (now) { if (saveTimer) clearTimeout(saveTimer); return doWrite(); }
   if (saveTimer) return;
@@ -170,7 +175,7 @@ function pruneSessions() {
   for (const k of Object.keys(sessions)) if (!sessions[k] || sessions[k].exp < now) delete sessions[k];
 }
 function saveSessions(now) {
-  const w = () => { try { pruneSessions(); fs.writeFileSync(sessionsPath, JSON.stringify(sessions)); } catch {} };
+  const w = () => { try { pruneSessions(); writeFileAtomic(sessionsPath, JSON.stringify(sessions)); } catch {} };
   if (now) { if (sessionsTimer) { clearTimeout(sessionsTimer); sessionsTimer = null; } return w(); }
   if (sessionsTimer) return;
   sessionsTimer = setTimeout(() => { sessionsTimer = null; w(); }, 400);
@@ -231,7 +236,7 @@ function saveRoles() {
   if (rolesTimer) return;
   rolesTimer = setTimeout(() => {
     rolesTimer = null;
-    try { fs.writeFileSync(rolesPath, JSON.stringify(rolesCfg, null, 2)); } catch {}
+    writeFileAtomic(rolesPath, JSON.stringify(rolesCfg, null, 2));
   }, 200);
 }
 function permsOfRole(role) {
@@ -256,7 +261,7 @@ function pruneTraffic() {
 }
 let trafficTimer = null;
 function saveTraffic(now) {
-  const w = () => { try { pruneTraffic(); fs.writeFileSync(trafficPath, JSON.stringify(traffic)); } catch {} };
+  const w = () => { pruneTraffic(); writeFileAtomic(trafficPath, JSON.stringify(traffic)); };
   if (now) { if (trafficTimer) { clearTimeout(trafficTimer); trafficTimer = null; } return w(); }
   if (trafficTimer) return;
   trafficTimer = setTimeout(() => { trafficTimer = null; w(); }, 400);
@@ -268,7 +273,7 @@ function saveConfigRoles(roles) {
     if (!cfg.relay || typeof cfg.relay !== 'object') cfg.relay = {};
     if (!cfg.relay.auth || typeof cfg.relay.auth !== 'object') cfg.relay.auth = {};
     cfg.relay.auth.roles = roles;
-    fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(cfg, null, 2) + '\n');
+    writeFileAtomic(path.join(root, 'config.json'), JSON.stringify(cfg, null, 2) + '\n');
   } catch (e) { log(`[ADMIN] 写 config.json 失败: ${e.message}`); }
 }
 /* 当前请求的计量身份:已登录=账号;本机/token 免登录=__local__;其它=__ip:<地址> */
@@ -674,7 +679,7 @@ function saveChat() {
   if (chatSaveTimer) return;
   chatSaveTimer = setTimeout(() => {
     chatSaveTimer = null;
-    try { fs.writeFileSync(chatPath, JSON.stringify(chatLog.slice(-500))); } catch {}
+    writeFileAtomic(chatPath, JSON.stringify(chatLog.slice(-500)));
   }, 400);
 }
 

@@ -7,7 +7,21 @@ const fs = require('fs');
 const path = require('path');
 
 const root = __dirname;
-const cfg = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
+/* 配置装载带兜底:config.json 损坏(写一半断电/手工编辑坏)→ 自动回退 .bak 备份
+   (管理器写配置前会自动留 .bak);都坏才崩,且日志写明,不再"无输出神秘退出" */
+function loadCfg() {
+  try { return JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8')); }
+  catch (e) {
+    const msg = `config.json 解析失败: ${e.message}`;
+    try { fs.appendFileSync(path.join(root, 'logs', 'sinkhole.log'), `[FATAL] ${new Date().toISOString()} ${msg}\n`); } catch {}
+    try {
+      const bak = JSON.parse(fs.readFileSync(path.join(root, 'config.json.bak'), 'utf8'));
+      try { fs.appendFileSync(path.join(root, 'logs', 'sinkhole.log'), `[WARN] 已回退 config.json.bak\n`); } catch {}
+      return bak;
+    } catch { throw new Error(`${msg}；且 config.json.bak 也不可用/不存在`); }
+  }
+}
+const cfg = loadCfg();
 
 const logsDir = path.join(root, 'logs');
 if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });

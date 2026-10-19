@@ -100,11 +100,15 @@ if (-not $homeSsid) {
   $seen = (netsh wlan show networks 2>&1 | Out-String)
   $profs = @(); foreach ($m in [regex]::Matches((netsh wlan show profiles 2>&1 | Out-String), '(?:All User Profile|所有用户配置文件)\s*:\s*(.+?)\r?$')) { $profs += $m.Groups[1].Value.Trim() }
   $cand = @()
-  foreach ($m in [regex]::Matches($seen, 'SSID\s+\d+\s*:\s*(.+?)\r?$')) {
-    $s = $m.Groups[1].Value.Trim()
-    if ($s -and ($profs -contains $s) -and $s -ne $Ssid) { $cand += $s }   # 排除自己(开成同名热点)
+  foreach ($blk in ($seen -split '(?=SSID\s+\d+\s*:)')) {
+    $mS = [regex]::Match($blk, 'SSID\s+\d+\s*:\s*(.+?)\r?\n'); if (-not $mS.Success) { continue }
+    $s = $mS.Groups[1].Value.Trim()
+    if (-not $s -or -not ($profs -contains $s) -or $s -eq $Ssid) { continue }   # 排除自己(开成同名热点)
+    $mP = [regex]::Match($blk, 'Signal\s*:\s*(\d+)%'); $sig = if ($mP.Success) { [int]$mP.Groups[1].Value } else { 0 }
+    $cand += [pscustomobject]@{ Ssid = $s; Sig = $sig }                          # 按信号排序,不再吃第一个垃圾AP
   }
-  if ($cand.Count) { $homeSsid = $cand[0]; Write-Host "上联网自动选择: $homeSsid (已保存且在范围内;出门换网不用改配置)" -ForegroundColor Cyan }
+  if ($cand.Count) { $homeSsid = ($cand | Sort-Object Sig -Descending | Select-Object -First 1).Ssid
+    Write-Host "上联网自动选择: $homeSsid (已保存且信号最强;出门换网不用改配置)" -ForegroundColor Cyan }
 }
 if (-not $homeSsid) {
   $homeSsid = 'CU_2kyA'
