@@ -139,6 +139,10 @@ GET/POST /api/admin/roles  读/存身份组(defaultPerms + roles{perms,monthlyQu
 GET/POST /api/admin/accounts  账号→身份组:GET 列表,POST 改归属(写回 config.json relay.auth.roles,重启生效)
 GET    /api/admin/traffic   本月流量表(逐账号 up/down/配额占比)
 POST   /api/admin/traffic/reset  流量清零(body {user}=单个 / {}=全部)
+GET    /api/admin/visits?limit=200  局域网访问记录(04 管理页;新→旧;admin)
+POST   /api/admin/visits         清空访问记录(留痕:时间/IP/路径/码/90秒同设备同路径合并/UA;
+                                 过滤 /api 轮询+系统探测+/p/ 子资源;存 storage/visits.json;
+                                 上限 relay.visitsMax 默认1000,relay.visits=false 关闭)
 ```
 
 ## 配置要点(config.json)

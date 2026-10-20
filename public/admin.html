@@ -148,6 +148,31 @@ select{font:400 13px/1.4 var(--f-sans);border:1px solid var(--line-2);background
       </div>
     </div>
   </section>
+
+  <!-- 04 访问记录 -->
+  <section class="sec">
+    <div class="sec-hd">
+      <span class="sec-no">04</span><h2>访问记录</h2>
+      <span class="n" id="visStat">storage/visits.json</span>
+      <span class="sp"></span>
+      <select id="visLimit" style="height:26px">
+        <option value="50">50 条</option>
+        <option value="200" selected>200 条</option>
+        <option value="500">500 条</option>
+      </select>
+      <button class="btn sm" id="refreshVis" type="button">刷新</button>
+      <button class="btn sm danger" id="clearVis" type="button">清空记录</button>
+    </div>
+    <div class="sec-bd">
+      <div id="visWrap"><div class="empty">加载中…</div></div>
+      <div class="hint">
+        局域网设备访问本服务的留痕:时间 · IP · 路径 · 状态码 · 90 秒内同设备同路径合并计数(如 ×12) · 设备 UA。
+        已自动过滤:接口轮询(/api/)、系统联网探测与爬虫(/generate_204、favicon 等)、/p/ 的图片 CSS 等子资源(只记页面导航)。
+        最多保留 <b>config relay.visitsMax</b>(默认 1000) 条,超出丢最旧;写 <b>relay.visits=false</b> 可整体关闭。
+        状态码 <span style="color:#e11d48">4xx/5xx 标红</span>,提示该路径被拒/出错。
+      </div>
+    </div>
+  </section>
 </div>
 
 <div id="toast" role="status"></div>
@@ -330,6 +355,51 @@ function loadTraffic(){
   fetch('/api/admin/traffic').then(function(r){return r.json();})
     .then(renderTraffic).catch(function(){});
 }
+/* ---- 04 访问记录 ---- */
+function fmtT(ts){
+  var d=new Date(ts),p=function(x){return (x<10?'0':'')+x;};
+  return p(d.getMonth()+1)+'/'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+}
+function renderVis(d){
+  $('visStat').textContent='共 '+d.total+' 条 · 显示最近 '+d.rows.length+' 条(新→旧)';
+  var wrap=$('visWrap');
+  if(!d.rows.length){wrap.innerHTML='<div class="empty">暂无访问记录 —— 设备访问后自动出现(每 30 秒自动刷新)</div>';return;}
+  var tb=document.createElement('table');
+  tb.innerHTML='<thead><tr><th>时间</th><th>IP</th><th>路径</th><th class="num">码</th><th class="num">次</th><th>设备 UA</th></tr></thead>';
+  var tbody=document.createElement('tbody');
+  d.rows.forEach(function(r){
+    var tr=document.createElement('tr');
+    var td0=document.createElement('td'); td0.className='mono'; td0.textContent=fmtT(r.t);
+    var td1=document.createElement('td'); td1.className='mono'; td1.textContent=r.ip;
+    var td2=document.createElement('td'); td2.className='mono';
+    td2.textContent=r.path; td2.title=r.path;
+    td2.style.cssText='max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    var td3=document.createElement('td'); td3.className='num'; td3.textContent=r.code||'—';
+    if(r.code>=400)td3.style.color='#e11d48';
+    var td4=document.createElement('td'); td4.className='num';
+    td4.textContent=(r.n&&r.n>1)?('×'+r.n):'1';
+    if(r.n&&r.n>1)td4.style.fontWeight='700';
+    var td5=document.createElement('td'); td5.className='mono';
+    td5.textContent=String(r.ua||'?').replace(/\s+/g,' ').slice(0,70); td5.title=r.ua||'';
+    tr.append(td0,td1,td2,td3,td4,td5); tbody.appendChild(tr);
+  });
+  tb.appendChild(tbody); wrap.innerHTML=''; wrap.appendChild(tb);
+}
+function loadVis(){
+  var lim=($('visLimit')&&$('visLimit').value)||'200';
+  fetch('/api/admin/visits?limit='+lim).then(function(r){return r.json();})
+    .then(renderVis)
+    .catch(function(){ $('visWrap').innerHTML='<div class="empty">加载失败(权限或服务未响应)</div>'; });
+}
+$('refreshVis').onclick=loadVis;
+$('visLimit').onchange=loadVis;
+$('clearVis').onclick=function(){
+  if(!confirm('清空全部访问记录?'))return;
+  fetch('/api/admin/visits',{method:'POST'}).then(function(r){return r.json();})
+    .then(function(j){toast(j.ok?'已清空':'失败');loadVis();})
+    .catch(function(){toast('网络错误');});
+};
+setInterval(loadVis,30000);
 /* ---- 装载 ---- */
 fetch('/api/admin/roles').then(function(r){
   if(!r.ok) throw new Error('forbidden'); return r.json();
@@ -338,7 +408,7 @@ fetch('/api/admin/roles').then(function(r){
   PERMS=d.perms||PERMS;
   renderRoles();
   return fetch('/api/admin/accounts').then(function(r){return r.json();});
-}).then(function(d){ renderAccounts(d.accounts||[],d.roles||[]); loadTraffic(); })
+}).then(function(d){ renderAccounts(d.accounts||[],d.roles||[]); loadTraffic(); loadVis(); })
   .catch(function(){ $('rolesWrap').innerHTML='<div class="empty">无权限或加载失败 —— <a href="/relay">回中继站</a></div>'; });
 })();
 </script>

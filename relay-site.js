@@ -1175,11 +1175,57 @@ function mirrorOpts() {
   };
 }
 
+/* ---------- 局域网访问记录(04 管理页) ----------
+ * 谁(IP/UA)、什么时候、访问了什么路径、返回什么、90秒内同设备同路径合并计数。
+ * 过滤:/api/* 轮询与接口(免刷屏)、系统探测/fav 图标、/p/ 的子资源(只记页面导航)。
+ * 存储:storage/visits.json,保留最近 R.visitsMax(默认1000)条,400ms 防抖原子写。
+ * relay.visits=false 可整体关闭。 */
+const visPath = path.join(root, 'storage', 'visits.json');
+let visLog = [];
+let visTimer = null;
+function loadVis() {
+  try {
+    const v = JSON.parse(fs.readFileSync(visPath, 'utf8'));
+    visLog = Array.isArray(v) ? v : [];
+  } catch { visLog = []; }
+}
+function saveVis(now) {
+  const w = () => writeFileAtomic(visPath, JSON.stringify(visLog.slice(-R.visitsMax)));
+  if (now) { if (visTimer) { clearTimeout(visTimer); visTimer = null; } return w(); }
+  if (visTimer) return;
+  visTimer = setTimeout(() => { visTimer = null; w(); }, 400);
+}
+const VIS_SKIP = ['/generate_204', '/gen_204', '/connecttest.txt', '/ncsi.txt', '/favicon.ico', '/robots.txt', '/.well-known/'];
+function noteVisit(req, p, code) {
+  if (R.visits === false || !p || p.length > 400) return null;
+  if (p.startsWith('/api/')) return null;                                   // 接口轮询不记(免每5秒刷一条)
+  for (const s of VIS_SKIP) { if (p === s || p.startsWith(s)) return null; }  // 系统探测/爬虫不记
+  if (p.startsWith('/p/')) {                                                 // /p/ 只记页面导航,不记图片/CSS等子资源
+    const dest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
+    if (dest && dest !== 'document') return null;
+  }
+  const now = Date.now();
+  const ip = clientIp(req);
+  for (let i = visLog.length - 1; i >= 0 && now - visLog[i].t < 90000; i--) {  // 90s 内同 IP 同路径合并
+    if (visLog[i].ip === ip && visLog[i].path === p && visLog[i].code === (code || 0)) {
+      visLog[i].n = (visLog[i].n || 1) + 1; visLog[i].t = now; saveVis(); return visLog[i];
+    }
+  }
+  const rec = { t: now, ip, ua: String(req.headers['user-agent'] || '?').slice(0, 80), path: p, code: code || 0, n: 1 };
+  visLog.push(rec);
+  if (visLog.length > R.visitsMax) visLog.splice(0, visLog.length - R.visitsMax);
+  saveVis();
+  return rec;
+}
+
 /* ---------- 路由 ---------- */
 
 const router = (req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
+  // 访问记录:响应发出后回填状态码(页面/下载/404 都留痕;接口与探测已在 noteVisit 里过滤)
+  const vr = noteVisit(req, p);
+  if (vr) res.on('finish', () => { try { if (vr.code !== res.statusCode) { vr.code = res.statusCode; saveVis(); } } catch {} });
   try {
     const mo = mirrorOpts();
     if ((p === '/' || p === '/index.html') && (req.method === 'GET' || req.method === 'HEAD')) {
@@ -1233,6 +1279,19 @@ const router = (req, res) => {
       return json(res, 200, { month: new Date().toISOString().slice(0, 7), rows });
     }
     if (p === '/api/admin/traffic/reset' && req.method === 'POST') return handleTrafficReset(req, res);
+    // —— 局域网访问记录(04) ——
+    if (p === '/api/admin/visits' && req.method === 'GET') {
+      if (!canAdmin(req)) return json(res, 403, { error: '仅管理员' });
+      const lim = Math.min(500, Math.max(10, parseInt(url.searchParams.get('limit') || '200', 10) || 200));
+      const rows = visLog.slice(-lim).reverse();   // 新→旧
+      return json(res, 200, { total: visLog.length, rows });
+    }
+    if (p === '/api/admin/visits' && req.method === 'POST') {
+      if (!canAdmin(req)) return json(res, 403, { error: '仅管理员' });
+      visLog = []; saveVis(true);
+      log(`[VIS] ${clientIp(req)} 清空访问记录`);
+      return json(res, 200, { ok: true });
+    }
     // —— 登录/登出(账号鉴权) ——
     if (p === '/auth/login' && req.method === 'GET') {
       if (requireAuth(req)) return redirect(res, safeNext(url.searchParams.get('next')));
@@ -1348,13 +1407,14 @@ const router = (req, res) => {
 
 function start(config, logger) {
   log = logger || log;
-  R = Object.assign({ enabled: true, host: '127.0.0.1', port: 28791, maxUploadMB: 2048 }, config.relay || {});
+  R = Object.assign({ enabled: true, host: '127.0.0.1', port: 28791, maxUploadMB: 2048, visitsMax: 1000 }, config.relay || {});
   if (!R.enabled) return Promise.resolve(null);
   ensureDirs();
   loadMeta();
   loadChat();
   loadSessions();
   loadRoles();
+  loadVis();
   loadTraffic();
   const srv = http.createServer(router);
   srv.requestTimeout = 0; // 大文件上传不设总时长限制(空闲由客户端决定)
