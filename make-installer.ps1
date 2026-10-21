@@ -1,5 +1,8 @@
 ﻿# =====================================================================
 #  make-installer.ps1 —— 一键打包 IExpress 安装包(带安装向导 + 管理器 exe)
+#  ⚠ 路线状态(2026-10-22 v10):exe 路线【暂时舍弃】——安装后卸不掉/部分机
+#     exe 打不开/Win7 无解三个硬伤。新装与管理一律走 管理中心.bat +
+#     网页管理台(见 mgmt.js)。本脚本仅保留可构建性,不再维护。
 #  产物: dist\iflytek-sinkhole-setup.exe
 #        双击 → 解压 → UAC 提权 → 【安装向导窗】(目录/导入数据/热点/管理员账号)
 #        → 铺文件 → 应用配置 → setup-on-this-pc.ps1 → 结果窗(打开 管理器.exe / 门户)
@@ -139,6 +142,48 @@ if ($cp.ExitCode -ne 0 -or -not (Test-Path (Join-Path $staging 'launcher-stub.ex
 Move-Item (Join-Path $staging 'launcher-stub.exe') (Join-Path $staging ([char]0x4E2D + '继站管理器.exe')) -Force
 Remove-Item $stubPath, $manifestPath -Force -EA SilentlyContinue
 OK '中继站管理器.exe 已编译(WinExe + requireAdministrator 清单,双击自动弹 UAC)'
+
+# ---------- 2b) 编译 卸载中继站.exe(一键卸载向导,与安装包对称) ----------
+$uStubPath = Join-Path $staging 'uninstall-stub.cs'
+$uStubSrc = @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Windows.Forms;
+static class UStub {
+  [STAThread]
+  static int Main(string[] args) {
+    string dir = AppDomain.CurrentDomain.BaseDirectory;
+    string ps1 = Path.Combine(dir, "uninstall-gui.ps1");
+    if (!File.Exists(ps1)) {
+      MessageBox.Show("uninstall-gui.ps1 missing:\n" + ps1, "iflytek relay", MessageBoxButtons.OK, MessageBoxIcon.Error);
+      return 2;
+    }
+    string a = "-NoProfile -ExecutionPolicy Bypass -File \"" + ps1 + "\"";
+    foreach (string x in args) {
+      bool q = x.Length == 0 || x.IndexOfAny(new char[] { ' ', '"' }) >= 0;
+      a += q ? (" \"" + x.Replace("\"", "\\\"") + "\"") : (" " + x);
+    }
+    try {
+      var p = new Process();
+      p.StartInfo = new ProcessStartInfo("powershell.exe", a);
+      p.StartInfo.WorkingDirectory = dir;
+      p.StartInfo.UseShellExecute = false;
+      p.Start(); p.WaitForExit();
+      return p.ExitCode;
+    } catch (Exception e) { MessageBox.Show(e.Message, "uninstall fail"); return 1; }
+  }
+}
+'@
+[IO.File]::WriteAllText($uStubPath, $uStubSrc, [Text.Encoding]::ASCII)
+$uManifestPath = Join-Path $staging 'uninstall.manifest'
+[IO.File]::WriteAllText($uManifestPath, $manifest, [Text.Encoding]::ASCII)   # 复用上面 requireAdministrator 清单(变量还在,文件已删)
+$cscArgs2 = @('/nologo', '/target:winexe', '/optimize+', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll', '/win32manifest:uninstall.manifest', '/out:uninstall-stub.exe', 'uninstall-stub.cs')
+$cp2 = Start-Process -FilePath $csc -ArgumentList $cscArgs2 -WorkingDirectory $staging -Wait -PassThru -WindowStyle Hidden
+if ($cp2.ExitCode -ne 0 -or -not (Test-Path (Join-Path $staging 'uninstall-stub.exe'))) { throw "csc(uninstall) 失败 exit=$($cp2.ExitCode)" }
+Move-Item (Join-Path $staging 'uninstall-stub.exe') (Join-Path $staging ([char]0x5378 + '载中继站.exe')) -Force
+Remove-Item $uStubPath, $uManifestPath -Force -EA SilentlyContinue
+OK '卸载中继站.exe 已编译(WinExe + requireAdministrator 清单,双击自动弹 UAC)'
 
 # ---------- 3) 生成 install.cmd(GBK + CRLF;向导两阶段 + 目录重建) ----------
 Step '生成 install.cmd'

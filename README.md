@@ -24,25 +24,43 @@
 
 ## 换电脑快速部署(插谁谁开)
 
+**v10 起推荐入口:双击 `管理中心.bat`(免 exe、免装 Node、Win7 自适应)**
+
+```text
+1. 整个 iflytek-sinkhole 文件夹拷到新电脑任意位置(内含 runtime\node.exe,免装 Node)
+2. 双击 管理中心.bat → 同意 UAC(拒绝则进"受限模式":查状态/改配置可用,装/卸/热点会提示)
+   [1] 环境自检   [8] 安装/修复(3 任务+4 防火墙,全部指向本文件夹)
+   [2] 启动服务   [5] 开热点(经典 SoftAP:自动选卡/自动上联网/ICS+DHCP 兜底)
+   [a] 可视化管理台 → http://127.0.0.1:28790(网页配置/状态灯/日志/卸载演练)
+   [9] 冲突治理   [u] 一键卸载(可连文件夹一起删)
+3. 或把路由器/光猫 DHCP 下发的 DNS 指向本机 IP;设备浏览器访问 http://iflytek.com
+```
+
+命令行同效(等价于菜单,脚本调用/排障用):
+
 ```powershell
-# 1. 整个 iflytek-sinkhole 文件夹拷到新电脑任意位置(内含 runtime\node.exe,免装 Node)
-# 2. 管理员 PowerShell:
 Set-Location <你的路径>\iflytek-sinkhole
-.\setup-on-this-pc.ps1        # 证书+防火墙+开机自启+启动,一条命令
-# 3. 新电脑开热点:设置→移动热点(共享"以太网"或它的上网方式)
-#    或把路由器/光猫 DHCP 下发的 DNS 指向本机 IP
-# 4. 设备浏览器访问 http://iflytek.com
+.\管理中心.bat check        # 环境自检(节点/权限/配置/端口/任务/热点/冲突 一键体检)
+.\管理中心.bat install      # 注册 3 个计划任务 + 4 条防火墙规则(指向本文件夹)
+.\管理中心.bat start        # 启动服务(stop/restart 同理)
+.\管理中心.bat serve --open # 可视化管理台
+.\setup-on-this-pc.ps1      # 老路径:PowerShell 一条命令装机(仍可用)
 ```
 
 - **DNS 应答全自动**:查询来自哪个网段,就回本机在那个网段的 IP(内网回内网卡、
   移动热点客户端回 `192.168.137.1`),换网络/换电脑不用改配置
 - **白名单自动**:默认放行本机所有网卡网段(防公网滥用的意图保留,IPv6 直连拒绝)
 - 网卡插拔、热点开关后 15 秒内自动感知并重新抢占 53 端口(与 ICS 共存问题自愈)
-- 卸载:`.\uninstall-on-this-pc.ps1`(任务/防火墙删干净,存储文件保留)
+- 卸载:`管理中心.bat → [u]`一键卸载(停服务/删 3 任务/删防火墙/停热点,可选连文件夹一起删;
+  存储数据默认保留);命令行 `.\管理中心.bat uninstall --dry` 先演练
 - 系统没装 Node 也不想用自带运行时:`.\setup-on-this-pc.ps1 -BundleRuntime`
   (从 npmmirror 下载便携版 Node 到 `runtime\`)
 
 ## 一键安装包(exe)与 GitHub 仓库
+
+> **路线变更(2026-10-22)**:exe 路线**暂时舍弃**(实测 安装后卸不掉 / exe 壳打不开 /
+> Win7 不兼容三个硬伤)。新装与日常管理一律走 **`管理中心.bat` + 本地网页管理台**;
+> `make-installer.ps1`/`中继站管理器.exe`/`卸载中继站.exe` 源码保留但不再维护,见下文历史说明。
 
 **源码仓库(公开)**:https://github.com/qingshanjiluo/iflytek-sinkhole
 
@@ -66,17 +84,16 @@ cd iflytek-sinkhole
 
 - **包内带全配置**:根文件 + `public\*.html` + `certs\iflytek.pfx/*.cer`(证书指纹不变,设备
   已装的信任证书继续有效)+ `data.zip`(storage:文件列表/聊天/会话/身份组/流量,向导可选导入)
-- **中继站管理器.exe**(内嵌 requireAdministrator,**双击自动弹 UAC**,开热点/写 Program Files 才不失败):
-  启动/停止/重启服务、53/80/443/28791 状态灯、**无线网卡下拉选择**(内置/USB 任选,选完「保存热点配置」
-  写 config `relay.hotspot.nic`,hotspot.ps1 自动跟随)、热点 SSID/密码、开/关热点、打开中继站/管理后台、
-  **配置对话框**(拦截域名/上传上限/登录开关/伪装门户/上游DNS/热点默认,保存即写 config.json 并可自动重启)
+- **中继站管理器.exe —— 已舍弃(历史)**:原功能全部并入 `管理中心.bat` 菜单 + 网页管理台
+  (启停/状态/网卡下拉/热点 SSID·密码/配置对话框→网页「配置」页,保存即写 config.json 并可重启);
+  exe 壳在部分机器"无法运行",且 Win7 无解——这就是换 bat+js 的动因
 - 安装包用 Windows 自带 **IExpress** 打包(零第三方依赖):解压会拍平子目录,由 `install.cmd`(GBK+CRLF)
   按扩展名重建目录;管理器 exe 用 .NET Framework 自带 csc 编译的 WinExe 壳(Win10/11 直接可跑)
 - **构建机限制**:SED 必须 GBK(只能在中文 Windows 构建)、构建路径不能含空格
   (IExpress `/N` 不吃引号;脚本自动选 `TEMP`,含空格回退 `C:\iflytek-si-build`)
 - 自动化测试环境变量:`SKIP_WIZARD=1`(不弹向导,默认导数据)、`INSTALL_DIR=目录`、
   `SKIP_SETUP=1`(只铺文件)、`AUTO_EXIT=1`(不弹结果窗/不 pause)
-- 卸载:安装目录里跑 `uninstall-on-this-pc.ps1`
+- 卸载:**`管理中心.bat → [u]`**(v10 起,见文末「回滚/卸载」);旧 `卸载中继站.exe` 随 exe 路线一并舍弃
 
 > ⚠️ 仓库是**公开**的:`config.json` 含登录密码与热点 SSID/密码、`home-wifi-profile.xml` 含
 > 家里 WiFi 凭据——**换机部署后务必改密码**;不想公开就去仓库 Settings 改 Private。
@@ -94,12 +111,17 @@ cd iflytek-sinkhole
 | `public/login.html` | 登录页(账号密码表单) |
 | `public/admin.html` | 管理页 `/admin`:身份组+权限范围、账号分组、本月流量(仅管理员) |
 | `storage/` | `files/`+`meta.json` 文件;`chat.json` 聊天;`sessions.json` 会话;`roles.json` 身份组权限;`traffic.json` 月流量 |
-| `runtime/node.exe` | 便携 Node 运行时(v24 x64),换机免装 |
+| `runtime/node.exe` | 便携 Node 运行时(v24 x64),换机免装;**Win7 放 Node14 进 `runtime-win7\`** |
+| `管理中心.bat` | **v10 首选入口**:UAC 自适应(拒绝提权→受限模式兜底) + 节点三级探测 + 交互菜单(纯 ASCII,任意代码页不乱码) |
+| `mgmt.js` | 管理中心核心(零依赖 node):环境自检/服务启停/热点(纯 netsh)/任务安装/冲突归位/一键卸载/网页管理台 |
+| `keepalive.js` | 保活任务 node 版(Win7 PS2.0 无 Resolve-DnsName,老 PS 版会静默失效) |
+| `public/mgmt.html` | 可视化管理台前端(`http://127.0.0.1:28790`:状态灯/网页配置/日志/卸载演练) |
 | `make-cert.ps1` / `setup-firewall.ps1` / `register-autostart.ps1` | 单项脚本 |
-| `setup-on-this-pc.ps1` / `uninstall-on-this-pc.ps1` | **一键装机/卸载** |
-| `make-installer.ps1` | 打一键安装包 exe(IExpress,产物 `dist\iflytek-sinkhole-setup.exe`) |
-| `setup-wizard.ps1` | 安装向导(Ask=配置窗,Apply=导数据+应用配置+跑 setup;`-Phase` 两阶段) |
-| `launcher.ps1` | 管理器 GUI 源(编译产物 `中继站管理器.exe`:启停/状态灯/热点/配置对话框) |
+| `setup-on-this-pc.ps1` / `uninstall-on-this-pc.ps1` | 一键装机/卸载(PowerShell 老路径,仍可用) |
+| `uninstall-gui.ps1` | (旧 exe 路线,暂舍)卸载向导源 |
+| `make-installer.ps1` | (旧 exe 路线,暂舍)IExpress 安装包构建 |
+| `setup-wizard.ps1` | (旧 exe 路线,暂舍)安装向导 |
+| `launcher.ps1` | (旧 exe 路线,暂舍)管理器 GUI 源 |
 | `start.ps1` / `stop.ps1` | 手动后台启停(按 `--svc-sinkhole` 标记识别进程) |
 | `test-chat.js` | 聊天室双客户端自测 |
 | `test-dhcp.js` | DHCP 全流程自测(本机模拟手机 DISCOVER→OFFER→REQUEST→ACK) |
@@ -203,4 +225,30 @@ POST   /api/admin/visits         清空访问记录(留痕:时间/IP/路径/码/
 
 ## 回滚/卸载
 
-见 `uninstall-on-this-pc.ps1`,另需手动:路由器/光猫 DHCP 的 DNS 改回原值。
+**推荐:双击 `管理中心.bat` → `[u]` 一键卸载**(自动弹 UAC):
+
+- **演练先行**:菜单选 1(只列清单不执行),或 `.\管理中心.bat uninstall --dry`
+- **执行**:停全部服务进程(含别的副本)→ 删 3 个计划任务(`iflytek-sinkhole`+`sinkhole-hotspot`+
+  `sinkhole-keepalive`,防保活复活)→ 删 4 条防火墙规则 → 关热点;**文件与 storage 数据默认保留**
+- 子选项:「卸载并删除本文件夹」(延时自删,被占用留 `_残留.txt` 重启后再删)、清本机证书(`--cert`);
+  网页管理台「维护/卸载」页同样有演练+执行
+- 旧 `卸载中继站.exe` / `uninstall-on-this-pc.ps1` 仍可用,但**推荐走 bat**(多副本感知:会连
+  C:\Program Files 等别处的残留服务一起停)
+
+> v9 实证教训:旧卸载只删第 1 个任务 → `sinkhole-keepalive` 每 5 分钟把已删服务复活 → "卸不掉";
+> v10 在 bat/网页/CLI 三处都先删保活任务再停服务,顺序固化。
+
+另需手动:路由器/光猫 DHCP 的 DNS 改回原值;要清数据自己删 `storage\`。
+
+## Windows 7 适配(v10)
+
+- **Node 门禁**:捆绑 Node 24 只支持 Win10+;Win7/8 放 **Node14 便携版 `node.exe` 到
+  `runtime-win7\`**,`管理中心.bat` 三级探测(`runtime-win7 → runtime → PATH`)每级先
+  `-v` 冒烟,跑不起来的自动换下一级——"自动适应"就是这层。
+- **PowerShell 降级**:Win7 自带 PS2.0 没有 Get-CimInstance/Get-NetAdapter/Get-ScheduledTask/
+  Resolve-DnsName。v10 管理面(mgmt.js/keepalive.js)**全部只用 netsh/schtasks/taskkill/certutil/wmic**,
+  进程探测三级回退(CIM→WMI→wmic),PowerShell 仅 ICS 共享一步(PS2 兼容 COM 语法,失败自动退化
+  "AP 口静态 192.168.137.1")。
+- **证书**:`New-SelfSignedCertificate` Win7 没有 → 新机直接拷 `certs\` 目录(随文件夹走,检查项会提示)。
+- **编码**:bat 纯 ASCII 无代码页依赖;中文由 node 直写控制台(WriteConsoleW),GBK/UTF-8 控制台都不乱码。
+- 网页管理台需较新浏览器;Win7 只有 IE11 时用菜单(纯命令行,零依赖)。

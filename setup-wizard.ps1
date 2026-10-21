@@ -273,7 +273,7 @@ try {
 $tb.Text = (@("目标目录: $dst") + $logLines + @('本机 IP(DNS/设备指向它):') + $ips + @(
     '', '设备入口: 浏览器开 http://iflytek.com → 登录 → 中继站',
     "本机入口: 双击「中继站管理器.exe」或「打开中继站(管理员).cmd」",
-    "卸载: $dst\uninstall-on-this-pc.ps1")) -join "`r`n"
+    "卸载: 双击 $dst\卸载中继站.exe(图形向导,命令行版 uninstall-on-this-pc.ps1 同效)")) -join "`r`n"
 $f2.Controls.Add($tb)
 
 $mgr = Join-Path $dst '中继站管理器.exe'

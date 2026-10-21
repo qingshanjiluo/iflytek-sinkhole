@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>中继站 · 管理中心</title>
+<style>
+:root{--bg:#0e1116;--card:#171b22;--line:#262c36;--fg:#d7dde7;--dim:#8b94a3;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--acc:#4493f8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 "Segoe UI",system-ui,"Microsoft YaHei",sans-serif}
+header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+header h1{font-size:17px;margin:0;font-weight:600}
+.badge{padding:2px 9px;border-radius:20px;font-size:12px;border:1px solid var(--line)}
+.badge.ok{color:var(--ok);border-color:var(--ok)}.badge.bad{color:var(--bad);border-color:var(--bad)}.badge.warn{color:var(--warn);border-color:var(--warn)}
+nav{display:flex;gap:6px;padding:10px 18px 0}
+nav button{background:none;border:1px solid var(--line);border-bottom:none;color:var(--dim);padding:8px 18px;border-radius:8px 8px 0 0;cursor:pointer;font-size:14px}
+nav button.on{background:var(--card);color:var(--fg);border-color:var(--acc)}
+main{padding:16px 18px 60px}
+.tab{display:none}.tab.on{display:block}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.card h3{margin:0 0 6px;font-size:13px;color:var(--dim);font-weight:600;letter-spacing:.5px}
+.card .big{font-size:16px;font-weight:600}
+.ok{color:var(--ok)}.bad2{color:var(--bad)}.dim{color:var(--dim)}.warn2{color:var(--warn)}
+.btnrow{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 16px}
+button.act{background:#21262d;border:1px solid var(--line);color:var(--fg);padding:8px 16px;border-radius:8px;cursor:pointer;font-size:14px}
+button.act:hover{border-color:var(--acc)}
+button.act.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+button.act.danger{background:#da3633;border-color:#da3633;color:#fff}
+button.act:disabled{opacity:.5;cursor:not-allowed}
+details{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:14px}
+summary{cursor:pointer;color:var(--dim)}
+pre{white-space:pre-wrap;word-break:break-all;font-size:12.5px;background:#0b0e13;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:340px;overflow:auto}
+.form{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;max-width:980px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
+label.f{display:block;margin-bottom:4px;font-size:12.5px;color:var(--dim)}
+.inp{width:100%;padding:7px 10px;background:#0b0e13;border:1px solid var(--line);border-radius:7px;color:var(--fg);font-size:13.5px;font-family:inherit}
+.inp:focus{outline:none;border-color:var(--acc)}
+textarea.inp{min-height:74px;resize:vertical;font-family:Consolas,monospace;font-size:12.5px}
+.row{display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+h2{font-size:15px;border-left:3px solid var(--acc);padding-left:9px;margin:20px 0 10px}
+#toast{position:fixed;right:18px;bottom:18px;max-width:420px;z-index:99}
+.tmsg{background:#1b2431;border:1px solid var(--acc);border-radius:9px;padding:10px 14px;margin-top:8px;box-shadow:0 6px 22px rgba(0,0,0,.5);animation:in .2s}
+.tmsg.err{border-color:var(--bad)}
+@keyframes in{from{transform:translateY(10px);opacity:0}}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+th{background:#12161c;color:var(--dim);font-weight:600}
+.hint{font-size:12.5px;color:var(--dim);margin:6px 0 12px}
+code{background:#0b0e13;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>中继站 · 管理中心</h1>
+  <span id="bAdmin" class="badge">权限…</span>
+  <span id="bVerdict" class="badge">体检…</span>
+  <span id="bNode" class="badge dim">node</span>
+  <span style="flex:1"></span>
+  <button class="act" onclick="loadStatus()">刷新状态</button>
+</header>
+<nav>
+  <button class="on" data-t="s" onclick="tab(this,'s')">状态</button>
+  <button data-t="c" onclick="tab(this,'c')">配置</button>
+  <button data-t="l" onclick="tab(this,'l')">日志</button>
+  <button data-t="m" onclick="tab(this,'m')">维护 / 卸载</button>
+</nav>
+<main>
+
+<!-- ============ 状态 ============ -->
+<section id="t-s" class="tab on">
+  <div class="cards" id="cards"><div class="card"><h3>状态</h3><div class="big dim">加载中…</div></div></div>
+  <div class="btnrow">
+    <button class="act primary" onclick="act('start')">启动服务</button>
+    <button class="act" onclick="act('stop')">停止服务</button>
+    <button class="act" onclick="act('restart')">重启服务</button>
+    <span style="width:14px"></span>
+    <button class="act primary" onclick="act('hotspot-on')">开热点</button>
+    <button class="act" onclick="act('hotspot-off')">关热点</button>
+    <button class="act" onclick="act('install')">安装/修复注册项</button>
+    <button class="act" onclick="act('fix')" id="btnFix" style="display:none">冲突归位</button>
+  </div>
+  <div class="hint">服务＝DNS 拦截(:53) + 网页中继(本页地址栏端口)；热点＝经典 SoftAP（WPA2，兼容老设备）。操作需管理员（本页由 管理中心.bat 以管理员启动时即是）。</div>
+  <details><summary>完整体检报告（点开）</summary><pre id="fullText">…</pre></details>
+</section>
+
+<!-- ============ 配置 ============ -->
+<section id="t-c" class="tab">
+  <div class="row">
+    <button class="act primary" onclick="saveCfg()">保存配置（自动留 .bak + 原子写）</button>
+    <button class="act" onclick="loadCfg(true)">放弃修改重载</button>
+    <span class="hint" id="cfgNote"></span>
+  </div>
+  <div class="hint">保存后需「重启服务」生效；热点项（SSID/密码/网卡/上联网）保存后下次开热点生效。</div>
+  <div class="form">
+    <h2>拦截</h2>
+    <div class="grid">
+      <div><label class="f">拦截域名 sinkholeDomain</label><input class="inp" id="f_sinkholeDomain"></div>
+      <div><label class="f">连子域一起拦 blockSubdomains</label><select class="inp" id="f_blockSubdomains"><option value="false">false（只拦本体）</option><option value="true">true（拦 *.域名）</option></select></div>
+      <div><label class="f">应答 IP answerIP（空=按来源网卡自动）</label><input class="inp" id="f_answerIP"></div>
+      <div><label class="f">DNS 端口 dnsPort</label><input class="inp" id="f_dnsPort" type="number"></div>
+    </div>
+    <div style="margin-top:10px"><label class="f">额外劫持域名 sinkExtraDomains（每行一个）</label><textarea class="inp" id="f_sinkExtraDomains"></textarea></div>
+    <div style="margin-top:10px"><label class="f">上游 DNS upstreamDNS（每行一个，IP:端口）</label><textarea class="inp" id="f_upstreamDNS"></textarea></div>
+
+    <h2>中继站 relay</h2>
+    <div class="grid">
+      <div><label class="f">启用 relay.enabled</label><select class="inp" id="f_relay.enabled"><option value="true">true</option><option value="false">false</option></select></div>
+      <div><label class="f">监听地址 relay.host</label><input class="inp" id="f_relay.host"></div>
+      <div><label class="f">端口 relay.port（被占自动避让并跟随）</label><input class="inp" id="f_relay.port" type="number"></div>
+      <div><label class="f">上传上限 MB relay.maxUploadMB</label><input class="inp" id="f_relay.maxUploadMB" type="number"></div>
+      <div><label class="f">聊天室 relay.chat.enabled</label><select class="inp" id="f_relay.chat.enabled"><option value="true">true</option><option value="false">false</option></select></div>
+      <div><label class="f">网页转发 relay.proxy.enabled</label><select class="inp" id="f_relay.proxy.enabled"><option value="true">true</option><option value="false">false</option></select></div>
+      <div><label class="f">访问记录 relay.visits</label><select class="inp" id="f_relay.visits"><option value="true">true</option><option value="false">false</option></select></div>
+      <div><label class="f">访问记录上限 relay.visitsMax</label><input class="inp" id="f_relay.visitsMax" type="number"></div>
+    </div>
+
+    <h2>热点 relay.hotspot</h2>
+    <div class="grid">
+      <div><label class="f">热点 SSID</label><input class="inp" id="f_relay.hotspot.ssid"></div>
+      <div><label class="f">热点密码（≥8位）</label><input class="inp" id="f_relay.hotspot.key"></div>
+      <div><label class="f">无线网卡 nic（空=自动挑真实卡）</label><input class="inp" id="f_relay.hotspot.nic" list="nicList"><datalist id="nicList"></datalist></div>
+      <div><label class="f">上联网 staSsid（空=自动挑已保存且在范围的）</label><input class="inp" id="f_relay.hotspot.staSsid"></div>
+      <div><label class="f">上联网密码 staKey（新网才需要）</label><input class="inp" id="f_relay.hotspot.staKey"></div>
+    </div>
+
+    <h2>内置 DHCP relay.dhcp（给热点设备发 192.168.137.x）</h2>
+    <div class="grid">
+      <div><label class="f">启用</label><select class="inp" id="f_relay.dhcp.enabled"><option value="true">true</option><option value="false">false</option></select></div>
+      <div><label class="f">网关 gateway（=热点口本机 IP）</label><input class="inp" id="f_relay.dhcp.gateway"></div>
+      <div><label class="f">子网掩码 mask</label><input class="inp" id="f_relay.dhcp.mask"></div>
+      <div><label class="f">地址池 pool</label><input class="inp" id="f_relay.dhcp.pool"></div>
+      <div><label class="f">租期 leaseSec</label><input class="inp" id="f_relay.dhcp.leaseSec" type="number"></div>
+    </div>
+
+    <h2>登录账号 relay.auth（明文存本地，仓库公开勿提交隐私）</h2>
+    <div class="row">
+      <span>启用：</span><select class="inp" id="f_relay.auth.enabled" style="width:110px"><option value="true">true</option><option value="false">false</option></select>
+      <span class="hint">改完密码 / 加账号都在下面两块 JSON 里编辑</span>
+    </div>
+    <div><label class="f">accounts（{ "账号": "密码" }）</label><textarea class="inp" id="f_relay.auth.accounts" style="min-height:70px"></textarea></div>
+    <div style="margin-top:8px"><label class="f">roles（{ "账号": "admin" }，未列=普通用户）</label><textarea class="inp" id="f_relay.auth.roles" style="min-height:70px"></textarea></div>
+
+    <h2>伪装门户 relay.mirror（访问 / 镜像原站，暗门进中继站）</h2>
+    <div class="grid">
+      <div><label class="f">启用</label><select class="inp" id="f_relay.mirror.enabled"><option value="true">true</option><option value="false">false</option></select></div>
+      <div><label class="f">镜像地址 url</label><input class="inp" id="f_relay.mirror.url"></div>
+      <div><label class="f">暗门 door</label><input class="inp" id="f_relay.mirror.door"></div>
+      <div><label class="f">深链兜底 catchAll</label><select class="inp" id="f_relay.mirror.catchAll"><option value="true">true</option><option value="false">false</option></select></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 日志 ============ -->
+<section id="t-l" class="tab">
+  <div class="row">
+    <select class="inp" id="logFile" style="width:230px">
+      <option value="logs/sinkhole.log">服务 sinkhole.log</option>
+      <option value="logs/keepalive.log">保活 keepalive.log</option>
+      <option value="logs/hotspot.log">热点 hotspot.log</option>
+      <option value="logs/uninstall.log">卸载 uninstall.log</option>
+    </select>
+    <select class="inp" id="logLines" style="width:110px"><option>150</option><option selected>300</option><option>600</option></select>
+    <button class="act" onclick="loadLog()">刷新</button>
+    <label class="hint"><input type="checkbox" id="logAuto"> 每 5 秒自动刷新</label>
+    <span class="hint">（服务刚重启时日志最末尾就是启动成败原因）</span>
+  </div>
+  <pre id="logText">点「刷新」加载…</pre>
+</section>
+
+<!-- ============ 维护 ============ -->
+<section id="t-m" class="tab">
+  <h2>副本冲突检测（“多个服务打架/卸不掉”的根子）</h2>
+  <div class="btnrow">
+    <button class="act" onclick="loadConf()">重新检测</button>
+    <button class="act primary" onclick="act('fix')">一键归位（任务指向本文件夹 + 停掉副本进程）</button>
+  </div>
+  <div id="confBox" class="hint">未检测。</div>
+
+  <h2>注册项安装 / 修复</h2>
+  <div class="hint">重写 3 个计划任务（服务开机自启 / 热点开机 / 保活每 5 分钟）→ 全部指向<strong>本文件夹</strong>；并补齐 4 条防火墙规则。旧副本的任务会被自动归位。</div>
+  <div class="btnrow"><button class="act primary" onclick="act('install')">执行 安装/修复</button></div>
+
+  <h2>一键卸载</h2>
+  <div class="hint">步骤：停服务进程（含所有副本）→ 删 3 个计划任务（防保活复活）→ 删防火墙规则 → 关热点 → 文件与数据默认保留。</div>
+  <div class="btnrow">
+    <button class="act" onclick="uninstDry()">演练（只列清单）</button>
+    <button class="act danger" onclick="uninstRun(false)">执行卸载（保留文件）</button>
+  </div>
+  <pre id="uninstBox">未演练。</pre>
+  <div class="hint">连文件夹一起删：关掉本页，用 管理中心.bat 菜单 →「一键卸载」→ 选「卸载并删除本文件夹」。</div>
+
+  <h2>Win7 提示</h2>
+  <div class="hint">Windows 7 需要 Node 14 便携版：<code>runtime\node.exe</code>（Node≥20 不支持 Win7）。把 Node14 的 node.exe 放进 <code>runtime-win7\</code> 目录，bat 会自动优先使用。证书缺失时 443 不可用——拷贝整个文件夹时带上 <code>certs\</code>。</div>
+</section>
+</main>
+
+<div id="toast"></div>
+<script>
+/* ---------- 基础 ---------- */
+function $(id){return document.getElementById(id)}
+function toast(msg,isErr){var d=document.createElement('div');d.className='tmsg'+(isErr?' err':'');d.textContent=msg;$('toast').appendChild(d);setTimeout(function(){d.remove()},isErr?7000:3500)}
+function xhr(method,url,data){return new Promise(function(res,rej){var x=new XMLHttpRequest();x.open(method,url,true);x.setRequestHeader('Content-Type','application/json');x.onreadystatechange=function(){if(x.readyState===4){var ok=x.status>=200&&x.status<300;var j=null;try{j=JSON.parse(x.responseText)}catch(e){}if(!ok&&!j){rej(new Error('HTTP '+x.status));return}res(j||{raw:x.responseText})}};x.onerror=function(){rej(new Error('网络错误（管理台已断开？）'))};x.send(data?JSON.stringify(data):null)})}
+function tab(btn,t){document.querySelectorAll('nav button').forEach(function(b){b.classList.toggle('on',b.dataset.t===t)});document.querySelectorAll('.tab').forEach(function(s){s.classList.toggle('on',s.id==='t-'+t)});if(t==='s')loadStatus();if(t==='l')loadLog();if(t==='m')loadConf()}
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c]})}
+
+/* ---------- 状态 ---------- */
+var lastJson=null;
+function card(title,body){return '<div class="card"><h3>'+title+'</h3>'+body+'</div>'}
+function renderCards(j){
+  var p=j.procs||[];var ports=j.ports||{};var ts=j.tasks||{};var hs=j.hotspot||{};
+  var h='';
+  h+=card('服务进程', p.length===1?'<div class="big ok">单实例运行中</div><div class="dim">PID '+p[0].pid+(p[0].dir?'<br>'+esc(p[0].dir):'')+'</div>'
+    :(p.length===0?'<div class="big bad2">未运行</div><div class="dim">点「启动服务」</div>'
+    :'<div class="big warn2">'+p.length+' 个实例（会打架！）</div><div class="dim">点「重启服务」收敛为一个</div>'));
+  h+=card('DNS :'+(j.config==='ok'?$('f_dnsPort')&&$('f_dnsPort').value||53:53)+' 拦截', ports.dns?'<div class="big ok">应答正常</div>':'<div class="big dim">无应答</div>');
+  h+=card('网页中继', ports.relayHttp?'<div class="big ok">应答正常</div>':(ports.relayTcp?'<div class="big warn2">端口在听但接口不应答</div>':'<div class="big dim">未监听</div>'));
+  h+=card('热点 SoftAP', hs.started?'<div class="big ok">运行中</div><div class="dim">'+esc(hs.ssid||'?')+' · 客户端 '+(hs.clients||0)+'</div>':'<div class="big dim">未启动</div>');
+  var tinfo=[];for(var k in ts){var t=ts[k];tinfo.push('<div>'+(t.exists?'<span class="ok">✓</span>':'<span class="bad2">✗</span>')+' '+k+(t.exists?' <span class="dim">'+esc(t.state||'')+'</span>':' <span class="dim">未注册</span>')+'</div>')}
+  h+=card('计划任务 ×3', tinfo.join('')||'<span class="dim">—</span>');
+  h+=card('防火墙', (j.firewallMissing&&j.firewallMissing.length)?'<div class="big warn2">缺 '+j.firewallMissing.length+' 条</div><div class="dim">'+esc(j.firewallMissing.join(','))+'</div>':'<div class="big ok">4 条齐全</div>');
+  h+=card('证书/权限', '<div>'+(j.cert?'<span class="ok">✓ pfx</span>':'<span class="bad2">✗ pfx 缺失</span>')+'</div><div>'+(j.admin?'<span class="ok">管理员</span>':'<span class="warn2">非管理员</span>')+'</div>');
+  var cf=j.conflicts||{};
+  h+=card('副本冲突', cf.foreign?'<div class="big warn2">'+cf.foreign+' 个外来副本</div><div class="dim">去「维护」页归位</div>':'<div class="big ok">无冲突</div>');
+  h+=card('系统', '<div class="dim">node '+esc(j.node||'')+'</div><div class="dim">os '+esc(j.os||'')+'</div>');
+  $('cards').innerHTML=h;
+  $('bAdmin').textContent=j.admin?'管理员':'非管理员';
+  $('bAdmin').className='badge '+(j.admin?'ok':'warn');
+  $('bVerdict').textContent='体检 '+(j.verdict||'?');
+  $('bVerdict').className='badge '+(j.verdict==='ALL-OK'?'ok':'bad');
+  $('bNode').textContent='node '+esc(j.node||'');
+  $('btnFix').style.display=(cf.foreign?'':'none');
+}
+function loadStatus(){xhr('GET','/api/status').then(function(d){lastJson=d.json;renderCards(d.json||{});$('fullText').textContent=d.text||''}).catch(function(e){toast('状态加载失败: '+e.message,true)})}
+function act(a){
+  var names={start:'启动服务',stop:'停止服务',restart:'重启服务','hotspot-on':'开热点','hotspot-off':'关热点',install:'安装/修复',fix:'冲突归位'};
+  if(!confirm('执行「'+(names[a]||a)+'」？'))return;
+  toast('执行中…（热点最长 70 秒，请等待）');
+  xhr('POST','/api/action',{action:a}).then(function(d){
+    if(d.needAdmin){toast(d.msg||'需要管理员权限',true);return}
+    var msg=d.msg||(d.ok?'完成':'失败');
+    if(d.log&&d.log.length)msg=d.log.join('\n');
+    if(d.result){var r=d.result;msg=[].concat((r.tasks||[]).map(function(t){return '任务 '+t.name+': '+(t.ok?'OK':'失败')}),(r.firewall||[]).map(function(f){return '防火墙 '+f.name+': '+(f.ok?'OK':'失败')}),(r.warn||[])).join('\n')}
+    if(d.steps){msg=d.steps.join('\n')+'\n'+(d.msg||'')}
+    toast(msg,!d.ok);loadStatus();if(a==='fix')loadConf();
+  }).catch(function(e){toast('失败: '+e.message,true)});
+}
+
+/* ---------- 配置 ---------- */
+var FIELDS=[['sinkholeDomain','s'],['blockSubdomains','b'],['answerIP','s'],['dnsPort','n'],['sinkExtraDomains','l'],['upstreamDNS','l'],
+['relay.enabled','b'],['relay.host','s'],['relay.port','n'],['relay.maxUploadMB','n'],['relay.chat.enabled','b'],['relay.proxy.enabled','b'],['relay.visits','b'],['relay.visitsMax','n'],
+['relay.hotspot.ssid','s'],['relay.hotspot.key','s'],['relay.hotspot.nic','s'],['relay.hotspot.staSsid','s'],['relay.hotspot.staKey','s'],
+['relay.dhcp.enabled','b'],['relay.dhcp.gateway','s'],['relay.dhcp.mask','s'],['relay.dhcp.pool','s'],['relay.dhcp.leaseSec','n'],
+['relay.auth.enabled','b'],['relay.auth.accounts','j'],['relay.auth.roles','j'],
+['relay.mirror.enabled','b'],['relay.mirror.url','s'],['relay.mirror.door','s'],['relay.mirror.catchAll','b']];
+var BASE=null;
+function getP(o,p){var a=p.split('.'),c=o;for(var i=0;i<a.length;i++){if(c==null)return undefined;c=c[a[i]]}return c}
+function setP(o,p,v){var a=p.split('.'),c=o;for(var i=0;i<a.length-1;i++){if(c[a[i]]==null)c[a[i]]={};c=c[a[i]]}c[a[a.length-1]]=v}
+var _cfg=null;
+function loadCfg(norify){
+  xhr('GET','/api/config').then(function(d){
+    if(!d.ok){toast('配置不可用: '+(d.error||''),true);return}
+    _cfg=d.cfg;BASE=JSON.parse(JSON.stringify(d.cfg));
+    $('cfgNote').textContent='来源: '+d.src+(d.fallback?'（⚠ 当前是 .bak 回退，保存一次即修复）':'')+' · 服务器权限: '+(d.admin?'管理员':'非管理员');
+    FIELDS.forEach(function(f){
+      var el=$('f_'+f[0]);if(!el)return;var v=getP(_cfg,f[0]);
+      if(f[1]==='b'){el.value=(v===true||v===false)?String(v):(v?'true':'false')}
+      else if(f[1]==='n'){el.value=(v==null?'':v)}
+      else if(f[1]==='l'){el.value=(v==null||!v.length)?'':v.join('\n')}
+      else if(f[1]==='j'){el.value=v==null?'{}':JSON.stringify(v,null,1)}
+      else {el.value=v==null?'':v}
+    });
+    if(norify)toast('已重载磁盘配置');
+  }).catch(function(e){toast('配置加载失败: '+e.message,true)});
+}
+function saveCfg(){
+  var cfg=_cfg?JSON.parse(JSON.stringify(_cfg)):{};
+  var err=[];
+  FIELDS.forEach(function(f){
+    var el=$('f_'+f[0]);if(!el)return;var v;
+    if(f[1]==='b')v=el.value==='true';
+    else if(f[1]==='n'){v=parseInt(el.value,10);if(isNaN(v))err.push(f[0]+' 需为数字')}
+    else if(f[1]==='l')v=el.value.split('\n').map(function(s){return s.trim()}).filter(Boolean);
+    else if(f[1]==='j'){try{v=JSON.parse(el.value||'{}')}catch(e){err.push(f[0]+' JSON 语法错误: '+e.message)}}
+    else v=el.value.trim();
+    if(!err.length||f[1]!=='j'&&f[1]!=='n')setP(cfg,f[0],v);
+  });
+  if(err.length){toast('有错误未保存：\n'+err.join('\n'),true);return}
+  if(cfg.relay&&cfg.relay.hotspot&&cfg.relay.hotspot.key&&String(cfg.relay.hotspot.key).length<8&&cfg.relay.hotspot.key!==''){toast('热点密码至少 8 位（WPA2 要求）',true);return}
+  if(!confirm('保存配置到 config.json（自动留 .bak）？'))return;
+  xhr('POST','/api/config',{cfg:cfg}).then(function(d){
+    if(d.ok){toast('已保存'+(d.src==='config.json.bak'?'（并修复了损坏的主配置）':'')+'。服务类改动请点「重启服务」');loadCfg()}
+    else toast('保存失败: '+(d.msg||d.src||''),true);
+  }).catch(function(e){toast('保存失败: '+e.message,true)});
+}
+
+/* ---------- 日志 ---------- */
+var logTimer=null;
+function loadLog(){
+  var f=$('logFile').value,n=$('logLines').value;
+  xhr('GET','/api/logs?file='+encodeURIComponent(f)+'&lines='+n).then(function(d){$('logText').textContent=d.text||'(空)'}).catch(function(e){$('logText').textContent='加载失败: '+e.message});
+}
+setInterval(function(){if($('logAuto').checked&&document.querySelector('nav button[data-t=l]').classList.contains('on'))loadLog()},5000);
+
+/* ---------- 冲突/卸载 ---------- */
+function loadConf(){
+  xhr('GET','/api/conflicts').then(function(d){
+    var h='<table><tr><th style="width:70px">类型</th><th style="width:160px">名称</th><th style="width:80px">状态</th><th>详情</th></tr>';
+    (d.items||[]).forEach(function(i){
+      h+='<tr><td>'+(i.kind==='task'?'任务':'进程')+'</td><td>'+esc(i.name)+'</td><td class="'+(i.status==='ok'?'ok':'bad2')+'">'+esc(i.status)+'</td><td>'+esc(i.detail)+'</td></tr>';
+    });
+    h+='</table>';
+    if(d.foreign&&d.foreign.length)h+='<div class="warn2" style="margin-top:8px">外来副本目录：'+d.foreign.map(function(f){return esc(f.dir)}).join('  |  ')+'</div>';
+    else h+='<div class="ok" style="margin-top:8px">本文件夹即全部——无冲突</div>';
+    $('confBox').innerHTML=h;
+  }).catch(function(e){$('confBox').textContent='检测失败: '+e.message});
+}
+function uninstDry(){
+  toast('演练中…');
+  xhr('POST','/api/action',{action:'uninstall-dry'}).then(function(d){
+    $('uninstBox').textContent=JSON.stringify(d.would||d,null,2);
+    toast('演练完成（未执行任何变更）');
+  }).catch(function(e){toast('演练失败: '+e.message,true)});
+}
+function uninstRun(){
+  if(!confirm('确认执行卸载？\n停服务 → 删 3 计划任务 → 删防火墙规则 → 关热点\n（文件与数据保留，可随时重装）'))return;
+  xhr('POST','/api/action',{action:'uninstall'}).then(function(d){
+    var out=(d.steps||[]).map(function(s){return s.name+': '+s.detail}).join('\n');
+    out+='\n'+(d.msg||'');
+    if(d.needAdmin)out+='\n→ 需要管理员：关本页，右键 管理中心.bat → 以管理员身份运行';
+    $('uninstBox').textContent=out;
+    toast(d.msg||'卸载完成',!d.ok);loadStatus();
+  }).catch(function(e){toast('卸载失败: '+e.message,true)});
+}
+
+/* ---------- 启动 ---------- */
+loadStatus();loadCfg();
+</script>
+</body>
+</html>

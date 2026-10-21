@@ -402,7 +402,7 @@ $btnCfg.Add_Click({ Show-Config })
 $f.Controls.Add($btnCfg)
 
 $tipLb = New-Object System.Windows.Forms.Label
-$tipLb.Text = '状态灯每 4 秒自动刷新 · 改完配置点「重启」生效 · 卸载: uninstall-on-this-pc.ps1'
+$tipLb.Text = '状态灯每 4 秒自动刷新 · 改完配置点「重启」生效 · 卸载: 双击 卸载中继站.exe'
 $tipLb.AutoSize = $true; $tipLb.ForeColor = [System.Drawing.Color]::Gray; $tipLb.Location = '24,554'; $f.Controls.Add($tipLb)
 
 # ---------- 状态刷新 ----------
