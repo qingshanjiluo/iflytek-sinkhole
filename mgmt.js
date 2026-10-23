@@ -684,6 +684,13 @@ async function check(o) {
   if (supp.length) P('OK', `无线网卡 ${supp.map(d => d.name + (d.supported ? '✓' : '✗')).join(' / ')} 承载网络支持`);
   else if (drvs.length) P('!!', `无线网卡 ${drvs.map(d => d.name).join('/')} 驱动不支持承载网络（或驱动太老）`);
   else P('!!', '未检测到无线网卡（USB 网卡插好了吗？）');
+  // 别的 DHCP 抢答（路由器没改 DNS/关 DHCP，或热点网段与路由器桥接）→ 设备拿到错网关/错 DNS，拦截失效
+  try {
+    const rf = path.join(ROOT, 'storage', 'dhcp-rivals.json');
+    const ro = JSON.parse(fs.readFileSync(rf, 'utf8'));
+    const ks = Object.keys(ro).filter(k => Date.now() - (ro[k].t || 0) < 14 * 86400000);
+    if (ks.length) P('!!', `局域网有别的 DHCP 在抢答（${ks.slice(0, 3).map(k => (ro[k].ip || '?') + '←' + k.slice(0, 8)).join(', ')}${ks.length > 3 ? ' 等' + ks.length + '台' : ''}）—— 设备可能拿到错网关/错 DNS 导致拦截失效；教程「第 1 步:改路由器」（路由器 DHCP 改为 DNS 指向本机，或关掉路由器 DHCP）`);
+  } catch {}
   // 冲突
   const cf = conflicts(); j.conflicts = { foreign: cf.foreign.length, copies: cf.copies.map(c2 => c2.dir) };
   if (cf.foreign.length) P('!!', `发现 ${cf.foreign.length} 个别的副本被任务/进程引用: ${cf.foreign.map(f => f.dir).join(' | ')} —— 管理中心 → 冲突治理 归位`);
@@ -748,6 +755,21 @@ async function serve(o) {
         if (f.indexOf('..') !== -1 || !/^logs\//.test(f)) return send(400, { ok: false, msg: '仅允许 logs/ 下的文件' });
         return send(200, { ok: true, file: f, text: tail(f, +(u.searchParams.get('lines') || 200)) }, 'json');
       }
+      if (req.method === 'GET' && u.pathname === '/api/visits') {
+        // 局域网访问记录（中继站 storage/visits.json 直读；中继站进程才记录，本台只读展示）
+        const n = Math.max(10, Math.min(1000, +(u.searchParams.get('n') || 100)));
+        const c = loadCfg();
+        const on = !c.cfg || !c.cfg.relay || c.cfg.relay.visits !== false;
+        const cap = (c.cfg && c.cfg.relay && +c.cfg.relay.visitsMax) || 1000;
+        let rows = []; let total = 0; let err = '';
+        try {
+          const v = JSON.parse(fs.readFileSync(path.join(ROOT, 'storage', 'visits.json'), 'utf8'));
+          rows = Array.isArray(v) ? v : [];
+          total = rows.length;
+          rows = rows.slice(-n).reverse();
+        } catch (e) { err = String(e.message || e); }
+        return send(200, { ok: true, on, cap, total, rows, err }, 'json');
+      }
       if (req.method === 'GET' && u.pathname === '/api/conflicts') return send(200, conflicts(), 'json');
       if (req.method === 'POST' && u.pathname === '/api/action') {
         const b = await readBody() || {};
@@ -788,7 +810,8 @@ async function serve(o) {
 
 /* --------------------------------------------------------------- 交互菜单 */
 async function menu() {
-  if (!process.stdin.isTTY) {
+  const scripted = process.env.MGMT_MENU_STDIN; // E2E 逃生口：文件按行喂菜单选择，跑完退出
+  if (!process.stdin.isTTY && !scripted) {
     // 无交互终端（管道/重定向）不能进问答循环——否则 EOF 会空转刷屏
     console.log('（菜单需要交互终端；常用命令：）\n' +
       '  node mgmt.js check            环境自检\n' +
@@ -801,6 +824,21 @@ async function menu() {
     return 0;
   }
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  if (scripted) {
+    // 测试模式：菜单问答改由脚本行驱动（自动答题到 0 退出），供 E2E 冒烟验证分发逻辑
+    let lines = [];
+    try { lines = fs.readFileSync(scripted, 'utf8').split(/\r?\n/).filter(x => x.length); } catch {}
+    let li = 0;
+    const clean = s => String(s).replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+    console.log = (...a) => process.stdout.write(a.map(clean).join(' ') + '\n');
+    console.error = console.log;
+    rl.question = (q, cb) => {
+      process.stdout.write(clean(q));
+      const v = li < lines.length ? lines[li++] : '0';
+      if (cb) cb(v);
+      return Promise.resolve(v);
+    };
+  }
   const ask = q => new Promise(r => { rl.question(q, r); rl.once('close', () => r('0')); });
   const big = [
     ['1', '环境自检（节点/权限/配置/端口/任务/热点 一键体检）'],

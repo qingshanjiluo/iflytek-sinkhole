@@ -1324,6 +1324,28 @@ const router = (req, res) => {
       try { decoded = decodeURIComponent(p.slice(3)); } catch { decoded = p.slice(3); }
       if (url.search && !decoded.includes('?')) decoded += url.search; // 手打未编码场景
       if (!/^https?:\/\//i.test(decoded)) decoded = 'http://' + decoded;
+      // SSRF 基线：/p/ 只当中转（公网页面是既定设计），内网/本机地址一律拒绝——
+      // 防把局域网设备（路由器 192.168.1.1、光猫、摄像头、云元数据 169.254.169.254、本机 127/本机名）
+      // 经中继站代理访问（会带中继站的网络身份回包）。纯内网主机名(无点)也拒。
+      {
+        let bad = false;
+        try {
+          const pu = new URL(decoded);
+          if (pu.protocol === 'http:' || pu.protocol === 'https:') {
+            const h = pu.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+            const ip4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+            if (h === 'localhost' || h === 'metadata.google.internal') bad = true;
+            else if (ip4) {
+              const a = +ip4[1], b = +ip4[2];
+              bad = (a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) ||
+                (a === 192 && b === 168) || (a === 169 && b === 254));
+            } else if (h.indexOf(':') !== -1) bad = (h === '::1' || h.indexOf('fe80') === 0 || h.indexOf('fc') === 0 || h.indexOf('fd') === 0);
+            else if (h.indexOf('.') === -1) bad = true; // 纯主机名=内网设备名(如路由器/iot)
+            else bad = /\.(local|lan|internal|home|corp)$/.test(h);
+          }
+        } catch {}
+        if (bad) return browseErr(res, '转发不支持内网/本机地址（防 SSRF：内网设备管理页请直接访问原地址，不经中继代理）。', decoded);
+      }
       if (req.method === 'GET' || req.method === 'POST') return handleBrowse(req, res, decoded);
       return json(res, 405, { error: 'method not allowed' });
     }

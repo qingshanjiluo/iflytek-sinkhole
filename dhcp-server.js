@@ -17,9 +17,39 @@
  *     不会污染本机其它网段(家庭 LAN/WSL);中继(giaddr)与续租(ciaddr)按 RFC 单播
  *   - MAC 哈希 → 池内稳定 IP:同一设备几乎永远同一 IP,重启服务/重连热点都不变
  *   - 客户端已选定别的 DHCP 服务器(REQUEST 带 serverId≠本机)时保持沉默,
- *     避免和家里路由器的 DHCP 打架
+ *     避免和家里路由器的 DHCP 打架；同时记账到 storage/dhcp-rivals.json
+ *     供管理中心体检提示“路由器 DHCP 还在抢答”(教程第1步没做的实证)
  */
 const dgram = require('dgram');
+const fs = require('fs');
+const path = require('path');
+
+/* 别的 DHCP 抢答记录器 → storage/dhcp-rivals.json {ip:{t,count}}：
+   客户端 REQUEST 点名了别的服务器 = 路由器还在发地址(教程「第1步:改路由器」没做)，
+   设备会拿到错网关/错 DNS 导致拦截失效 —— 管理中心体检读它给 [!!] 提示。10s 防抖合并写盘。 */
+const rivals = {}; let rivalTimer = null;
+function recordRival(srv) {
+  try {
+    const e = rivals[srv] || { count: 0 };
+    e.t = Date.now(); e.count += 1; rivals[srv] = e;
+    if (rivalTimer) return;
+    rivalTimer = setTimeout(() => {
+      rivalTimer = null;
+      try {
+        const f = path.join(__dirname, 'storage', 'dhcp-rivals.json');
+        let disk = {};
+        try { disk = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
+        for (const k in rivals) disk[k] = { t: rivals[k].t, count: ((disk[k] && disk[k].count) || 0) + rivals[k].count };
+        const now = Date.now();
+        for (const k in disk) if (now - (disk[k].t || 0) > 30 * 86400000) delete disk[k];
+        fs.writeFileSync(f + '.tmp', JSON.stringify(disk));
+        fs.renameSync(f + '.tmp', f);
+        for (const k in rivals) delete rivals[k];
+      } catch {}
+    }, 10 * 1000);
+    if (rivalTimer.unref) rivalTimer.unref();
+  } catch {}
+}
 
 /* ---------- 常量 ---------- */
 const T = { DISCOVER: 1, OFFER: 2, REQUEST: 3, DECLINE: 4, ACK: 5, NAK: 6, RELEASE: 7, INFORM: 8 };
@@ -205,6 +235,7 @@ function handleMessage(buf /* , rinfo */) {
       case T.REQUEST: {
         if (p.serverId && p.serverId !== D.gateway) { // 客户端选了别的服务器 → 沉默
           log(`[DHCP] REQUEST ${who} 已选他方服务器 ${p.serverId},忽略`);
+          recordRival(p.serverId); // 记账：体检据此提示“路由器 DHCP 还在抢答”
           return;
         }
         const want = p.reqIp || (p.ciaddr !== '0.0.0.0' ? p.ciaddr : null);
@@ -270,12 +301,10 @@ function start(config, logger) {
   setInterval(prune, 60 * 1000).unref();
 }
 
-module.exports = { start };
+module.exports = { start, recordRival }; // recordRival 供自测直驱
 
 /* 直接运行做本机自测: runtime\node.exe dhcp-server.js --selftest (仅启动服务端打印日志) */
 if (require.main === module) {
-  const path = require('path');
-  const fs = require('fs');
   const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
   start(cfg, (m) => console.log(m));
   console.log('DHCP selftest 服务端已启动(等待客户端包,直接跑 test-dhcp.js 更完整)');

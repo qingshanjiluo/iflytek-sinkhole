@@ -63,6 +63,7 @@ code{background:#0b0e13;border:1px solid var(--line);border-radius:5px;padding:1
   <button class="on" data-t="s" onclick="tab(this,'s')">状态</button>
   <button data-t="c" onclick="tab(this,'c')">配置</button>
   <button data-t="l" onclick="tab(this,'l')">日志</button>
+  <button data-t="v" onclick="tab(this,'v')">访问记录</button>
   <button data-t="m" onclick="tab(this,'m')">维护 / 卸载</button>
 </nav>
 <main>
@@ -156,6 +157,7 @@ code{background:#0b0e13;border:1px solid var(--line);border-radius:5px;padding:1
   <div class="row">
     <select class="inp" id="logFile" style="width:230px">
       <option value="logs/sinkhole.log">服务 sinkhole.log</option>
+      <option value="logs/sinkhole.log.1">服务(上一轮) sinkhole.log.1</option>
       <option value="logs/keepalive.log">保活 keepalive.log</option>
       <option value="logs/hotspot.log">热点 hotspot.log</option>
       <option value="logs/uninstall.log">卸载 uninstall.log</option>
@@ -166,6 +168,17 @@ code{background:#0b0e13;border:1px solid var(--line);border-radius:5px;padding:1
     <span class="hint">（服务刚重启时日志最末尾就是启动成败原因）</span>
   </div>
   <pre id="logText">点「刷新」加载…</pre>
+</section>
+
+<!-- ============ 访问记录 ============ -->
+<section id="t-v" class="tab">
+  <div class="row">
+    <button class="act primary" onclick="loadVisits()">刷新</button>
+    <select class="inp" id="visN" style="width:100px"><option>50</option><option selected>100</option><option>300</option></select>
+    <label class="hint"><input type="checkbox" id="visAuto"> 每 5 秒自动刷新</label>
+    <span class="hint">（记录在中继站 storage/visits.json，由中继站进程写；90 秒内同设备同路径合并计数）</span>
+  </div>
+  <div id="visBox" class="hint">点「刷新」加载…</div>
 </section>
 
 <!-- ============ 维护 ============ -->
@@ -201,7 +214,7 @@ code{background:#0b0e13;border:1px solid var(--line);border-radius:5px;padding:1
 function $(id){return document.getElementById(id)}
 function toast(msg,isErr){var d=document.createElement('div');d.className='tmsg'+(isErr?' err':'');d.textContent=msg;$('toast').appendChild(d);setTimeout(function(){d.remove()},isErr?7000:3500)}
 function xhr(method,url,data){return new Promise(function(res,rej){var x=new XMLHttpRequest();x.open(method,url,true);x.setRequestHeader('Content-Type','application/json');x.onreadystatechange=function(){if(x.readyState===4){var ok=x.status>=200&&x.status<300;var j=null;try{j=JSON.parse(x.responseText)}catch(e){}if(!ok&&!j){rej(new Error('HTTP '+x.status));return}res(j||{raw:x.responseText})}};x.onerror=function(){rej(new Error('网络错误（管理台已断开？）'))};x.send(data?JSON.stringify(data):null)})}
-function tab(btn,t){document.querySelectorAll('nav button').forEach(function(b){b.classList.toggle('on',b.dataset.t===t)});document.querySelectorAll('.tab').forEach(function(s){s.classList.toggle('on',s.id==='t-'+t)});if(t==='s')loadStatus();if(t==='l')loadLog();if(t==='m')loadConf()}
+function tab(btn,t){document.querySelectorAll('nav button').forEach(function(b){b.classList.toggle('on',b.dataset.t===t)});document.querySelectorAll('.tab').forEach(function(s){s.classList.toggle('on',s.id==='t-'+t)});if(t==='s')loadStatus();if(t==='l')loadLog();if(t==='v')loadVisits();if(t==='m')loadConf()}
 function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c]})}
 
 /* ---------- 状态 ---------- */
@@ -301,6 +314,28 @@ function loadLog(){
   xhr('GET','/api/logs?file='+encodeURIComponent(f)+'&lines='+n).then(function(d){$('logText').textContent=d.text||'(空)'}).catch(function(e){$('logText').textContent='加载失败: '+e.message});
 }
 setInterval(function(){if($('logAuto').checked&&document.querySelector('nav button[data-t=l]').classList.contains('on'))loadLog()},5000);
+setInterval(function(){if($('visAuto')&&$('visAuto').checked&&document.querySelector('nav button[data-t=v]').classList.contains('on'))loadVisits()},5000);
+
+/* ---------- 局域网访问记录（直读中继站 visits.json） ---------- */
+function loadVisits(){
+  var n=+$('visN').value;
+  xhr('GET','/api/visits?n='+n).then(function(d){
+    if(!d.ok){$('visBox').textContent='读取失败: '+(d.msg||d.err||'');return}
+    if(!d.rows||!d.rows.length){$('visBox').innerHTML='<span class="dim">暂无记录'+(d.err?'（读文件失败: '+esc(d.err)+'）':'（中继站开着、有设备访问过页面后这里才有）')+'</span>';return}
+    var on=d.on?'':'<div class="hint" style="color:#f87171">⚠ relay.visits=false 已关闭记录（当前是历史数据）</div>';
+    var h=on+'<div class="hint">共 '+d.total+' 条（上限 '+d.cap+'），最新在前'+(d.err?'；备份文件读取失败: '+esc(d.err):'')+'</div>';
+    h+='<table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px">';
+    h+='<tr style="color:var(--dim);text-align:left"><th style="padding:6px 8px;border-bottom:1px solid var(--line)">时间</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">IP</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">次</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">码</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">路径</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">UA</th></tr>';
+    for(var i=0;i<d.rows.length;i++){var r=d.rows[i];
+      h+='<tr><td style="padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:top">'+esc(new Date(r.t).toLocaleString('zh-CN',{hour12:false}))+'</td>'
+        +'<td style="padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top">'+esc(r.ip)+'</td>'
+        +'<td style="padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top">'+(r.n||1)+'</td>'
+        +'<td style="padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top">'+esc(r.code||'')+'</td>'
+        +'<td style="padding:6px 8px;border-bottom:1px solid var(--line);word-break:break-all;vertical-align:top">'+esc(r.path)+'</td>'
+        +'<td style="padding:6px 8px;border-bottom:1px solid var(--line);color:var(--dim);max-width:260px;word-break:break-all;vertical-align:top">'+esc(r.ua||'')+'</td></tr>';}
+    $('visBox').innerHTML=h+'</table>';
+  },function(e){$('visBox').textContent='失败: '+e.message});
+}
 
 /* ---------- 冲突/卸载 ---------- */
 function loadConf(){

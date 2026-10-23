@@ -30,7 +30,11 @@ const logFile = path.join(logsDir, 'sinkhole.log');
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.log(line);
-  try { fs.appendFileSync(logFile, line + '\n'); } catch {}
+  try {
+    // 轮转：>8MB 时 sinkhole.log → sinkhole.log.1（旧 .1 覆盖）——防 2.8MB→无限涨
+    try { const st = fs.statSync(logFile); if (st.size > 8 * 1048576) fs.renameSync(logFile, logFile + '.1'); } catch {}
+    fs.appendFileSync(logFile, line + '\n');
+  } catch {}
 }
 
 log('===== sinkhole 服务启动 =====');

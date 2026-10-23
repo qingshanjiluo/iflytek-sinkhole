@@ -8,13 +8,18 @@
  *   ① 0 实例        → 服务没了 → 重启任务
  *   ② 多实例打架    → 端口避让把栈切开（一个占 53/80/443/28791，其余 28792+ → 一半功能哑）
  *                     → 连续 2 轮 >1 实例（跨 5 分钟，避开暖机误判）→ 全杀 + 重启任务
- *   ③ 单实例但卡死  → 真发 DNS 查询探活，连续 2 轮无应答（>5 分钟）→ 重启任务
+ *   ③ 单实例但卡死  → 真发 DNS 查询探活，连续 2 轮无应答（>5 分钟）；
+ *                     且 53 无应答 ≠ 必然卡死 → 再探 relay /api/info 双确认：
+ *                     服务对象还活着(53被抢/绑定失败/瞬时负载) → 只提示不重启；
+ *                     两边都死 → 连续 2 轮 + 距上次重启 ≥10 分钟(冷却) 才重启
  * 状态记 logs/keepalive.state.json（防膨胀：一切正常时不写日志，只清状态）。
+ * 2026-10-22 实证：旧判据 30 分钟连杀 4 次 → relay 复核 + 冷却防连环杀。
  * ========================================================================== */
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
 const dgram = require('dgram');
+const http = require('http');
 
 const ROOT = __dirname;
 const SVC_FLAG = '--svc-sinkhole';
@@ -81,6 +86,22 @@ function dnsProbe(ms) {
     } catch { ok(false); }
   });
 }
+function relayProbe(cfg, ms) {
+  // 53 复核器：53 被抢/绑定失败时服务对象(中继站 /api/info)仍会应答 → 证明事件循环没死，不动手
+  return new Promise(res => {
+    let port = 28791;
+    try { port = +((cfg && cfg.relay && cfg.relay.port) || 28791) || 28791; } catch {}
+    let done = false; const ok = v => { if (!done) { done = true; res(v); } };
+    const t = setTimeout(() => ok(false), ms || 2500);
+    try {
+      const rq = http.get({ host: '127.0.0.1', port, path: '/api/info', timeout: ms || 2500 }, r => {
+        clearTimeout(t); r.resume(); ok(r.statusCode === 200);
+      });
+      rq.on('timeout', () => { clearTimeout(t); try { rq.destroy(); } catch {} ok(false); });
+      rq.on('error', () => { clearTimeout(t); ok(false); });
+    } catch { clearTimeout(t); ok(false); }
+  });
+}
 function sch(cmds) { // schtasks 封装
   try { return cp.spawnSync('schtasks', cmds, { windowsHide: true, encoding: 'buffer', timeout: 20000 }); } catch { return { status: -1 }; }
 }
@@ -94,7 +115,7 @@ async function restartTask(why, st) {
   await slp(1000);
   sch(['/run', '/tn', TASK]);
   log(`${why} → 已清实例(${ps.length} 个)并重启任务`);
-  saveState({}); // 复位
+  saveState({ lastKillAt: Date.now() }); // 只留冷却时间戳（计数器复位；防 10 分钟内连环杀）
 }
 (async function main() {
   const st = loadState();
@@ -119,11 +140,28 @@ async function restartTask(why, st) {
   st.multiSince = null;
   const alive = await dnsProbe(2500);
   if (alive) {
-    if (st.dnsFails || st.zeroFails) { saveState({}); } // 恢复正常 → 清状态(不写日志防膨胀)
+    if (st.dnsFails || st.zeroFails) saveState({}); // 恢复正常 → 清状态(不写日志防膨胀)
+    return;
+  }
+  // 53 无应答 ≠ 必然事件循环卡死：53 被抢/绑定失败/瞬时负载都会这样 → relay API 复核
+  let cfgJson = null;
+  try { cfgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8')); } catch {}
+  const relOk = await relayProbe(cfgJson, 2500);
+  if (relOk) {
+    if (st.dnsFails) { st.dnsFails = 0; saveState(st); }
+    // 节流：53 长期被外占时这条警告每 5 分钟一条会撑爆日志 → 1 小时最多一条
+    if (!st.relWarnAt || Date.now() - st.relWarnAt > 3600 * 1000) {
+      st.relWarnAt = Date.now(); saveState(st);
+      log('53 无应答但 relay /api/info 正常 → 事件循环活着，未重启（疑似 53 被抢/绑定失败）—— 教程「让设备走你的 DNS」核对，或管理中心体检看 :53 归属');
+    }
     return;
   }
   st.dnsFails = (st.dnsFails || 0) + 1;
   saveState(st);
-  if (st.dnsFails >= 2) return restartTask(`单实例 53 连续 ${st.dnsFails} 轮无应答(事件循环卡死)`, st);
-  log(`单实例 53 无应答(第 ${st.dnsFails} 轮,连续 2 轮才重启)`);
+  if (st.dnsFails < 2) { log(`单实例 53+relay 双无应答(第 ${st.dnsFails} 轮,连续 2 轮才重启)`); return; }
+  if (st.lastKillAt && Date.now() - st.lastKillAt < 10 * 60 * 1000) {
+    log(`双无应答但距上次重启仅 ${Math.round((Date.now() - st.lastKillAt) / 60000)} 分钟 → 冷却跳过(防连环杀,第 ${st.dnsFails} 轮)`);
+    return;
+  }
+  return restartTask(`单实例 53+relay 连续 ${st.dnsFails} 轮无应答(事件循环卡死)`, st);
 })().catch(e => { log('FATAL ' + (e.message || e)); process.exit(1); });
