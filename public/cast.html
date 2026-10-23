@@ -162,29 +162,31 @@ function rel(e){
   var cxp=(e.clientX-r.left)/(r.width||1), cyp=(e.clientY-r.top)/(r.height||1);
   return {rx:Math.max(0,Math.min(1,cxp)), ry:Math.max(0,Math.min(1,cyp))};
 }
-var drag={on:false,moved:0,sx:0,sy:0,lt:0};
+var drag={on:false,moved:0,sx:0,sy:0,px:0,py:0,lt:0,t0:0}, lastTapT=0;
 cv.addEventListener('pointerdown',function(e){
   cv.setPointerCapture&&cv.setPointerCapture(e.pointerId);
-  drag.on=true; drag.moved=0; drag.sx=e.clientX; drag.sy=e.clientY; drag.lt=Date.now();
+  drag.on=true; drag.moved=0; drag.sx=e.clientX; drag.sy=e.clientY;
+  drag.px=e.clientX; drag.py=e.clientY; drag.t0=drag.lt=Date.now();
   var p=rel(e);
   sendCtrl({ev:'click',rx:p.rx,ry:p.ry});
 });
 cv.addEventListener('pointermove',function(e){
   if(!drag.on) return;
-  drag.moved+=Math.abs(e.movementX||0)+Math.abs(e.movementY||0);
+  // 触摸端 movementX/Y 恒为 0(浏览器差异),必须用 clientX 手动累加,否则平板拖不动
+  drag.moved+=Math.abs(e.clientX-drag.px)+Math.abs(e.clientY-drag.py);
+  drag.px=e.clientX; drag.py=e.clientY;
   var now=Date.now(); if(now-drag.lt<30) return; drag.lt=now;
   var p=rel(e); sendCtrl({ev:'move',rx:p.rx,ry:p.ry});
 });
 cv.addEventListener('pointerup',function(e){
   if(!drag.on) return;
   drag.on=false;
-  var p=rel(e);
-  if(drag.moved<8&&Date.now()-drag.lt<320) sendCtrl({ev:'up',rx:p.rx,ry:p.ry});
-  else sendCtrl({ev:'up',rx:p.rx,ry:p.ry});
-  var lastTap=0;
+  var p=rel(e), quick=Date.now()-drag.t0<400, tap=drag.moved<8&&quick;
+  if(!tap){ sendCtrl({ev:'release',rx:p.rx,ry:p.ry}); return; } // 拖动结束:只抬手不触发 click(防误点链接)
+  sendCtrl({ev:'up',rx:p.rx,ry:p.ry});
   var now=Date.now();
-  if(now-lastTap<300) sendCtrl({ev:'dbl',rx:p.rx,ry:p.ry});
-  lastTap=now;
+  if(now-lastTapT<400) sendCtrl({ev:'dbl',rx:p.rx,ry:p.ry}); // 双击(触摸无原生 dblclick 兜底)
+  lastTapT=now;
 });
 cv.addEventListener('dblclick',function(e){ var p=rel(e); sendCtrl({ev:'dbl',rx:p.rx,ry:p.ry}); });
 cv.addEventListener('wheel',function(e){ e.preventDefault(); sendCtrl({ev:'wheel',dx:e.deltaX,dy:e.deltaY}); },{passive:false});

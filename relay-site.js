@@ -898,10 +898,11 @@ function wsCastAccept(req, socket) {
       else if (len === 127) {
         if (b.length < 10) break;
         const big = b.readBigUInt64BE(2);
-        const cap = cli.role === 'host' ? 4 * 1024 * 1024 : 8 * 1024;
-        if (Number(big) > cap) return castDrop(cli); // 投屏台 JPEG 帧≤4MB;观看者只许 8KB 控制帧
+        if (big > 0xffffffffn) return castDrop(cli);
         len = Number(big); off = 10;
       }
+      // 长度上限对 126/127 两种长度形式统一生效(投屏台 JPEG≤4MB;观看者只许 8KB 控制帧)
+      if (len > (cli.role === 'host' ? 4 * 1024 * 1024 : 8 * 1024)) return castDrop(cli);
       if (b.length < off + 4 + len) break;
       const mask = b.subarray(off, off + 4);
       const payload = Buffer.from(b.subarray(off + 4, off + 4 + len));
@@ -1595,9 +1596,12 @@ function start(config, logger) {
     if (p === '/ws/chat') return wsAccept(req, socket);
     socket.destroy();
   });
-  // 25 秒服务端 ping,穿过反代保持连接(浏览器自动回 pong)
+  // 25 秒服务端 ping,穿过反代保持连接(浏览器自动回 pong);投屏 socket 同样纳入心跳
   setInterval(() => {
-    for (const c of clients) { try { c.socket.write(wsFrame('', 9)); } catch { closeCli(c); } }
+    const ping = (sock, drop) => { try { sock.write(wsFrame('', 9)); } catch { drop(); } };
+    for (const c of clients) ping(c.socket, () => closeCli(c));
+    if (cast.host && !cast.host.closed) ping(cast.host.socket, () => castDrop(cast.host));
+    for (const v of cast.viewers) if (!v.closed) ping(v.socket, () => castDrop(v));
   }, 25000).unref();
 
   // 端口被占(如 wslrelay.exe 抢占动态端口)时自动 +1 避让,最多试 10 个

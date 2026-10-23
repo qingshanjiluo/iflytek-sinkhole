@@ -112,18 +112,31 @@ function navTo(u){
   else { f.src='/p/'+encodeURIComponent(c.raw); $('u').value=c.raw; syncNav(c.raw); }
 }
 function syncNav(url){ send({t:'nav',url:(url||(f.src||''))}); }
+var syncedUrl='';
 f.addEventListener('load', function(){
   // 同源(/p/)页面可读;内网跨域读不到→跳过状态同步
   try{
     var d=f.contentDocument;
+    var href='';
+    try{ href=(f.contentWindow&&f.contentWindow.location&&f.contentWindow.location.href)||''; }catch(e){}
+    if(href&&href.indexOf('/p/')!==-1){
+      var real='';
+      try{ real=decodeURIComponent(href.slice(href.indexOf('/p/')+3)); }catch(e){}
+      if(/^https?:\/\//i.test(real)&&real!==syncedUrl){ // iframe 内点了链接/历史前进 → 同步地址栏+广播观看端
+        syncedUrl=real;
+        $('u').value=real;
+        send({t:'nav',url:real});
+      }
+    }
     if(d&&d.title) meta.textContent=(d.title.slice(0,30)||'')+' · 平板反控作用于此页面';
   }catch(e){}
 });
 
 /* ---------- 反控:坐标在 iframe 视口系,递归同源命中,合成事件派发进真实 DOM ---------- */
-function iframePt(rx,ry){ // rx,ry=页面可见区域(含工具条)相对比例 → iframe 内坐标
+function iframePt(rx,ry){ // rx,ry=整页视口比例 → iframe 内坐标(必须先按整页换算再扣 iframe 偏移,否则工具条高度会把纵向坐标整体压偏)
   var r=f.getBoundingClientRect();
-  var x=rx*r.width, y=ry*r.height;
+  var x=rx*window.innerWidth - r.left;
+  var y=ry*window.innerHeight - r.top;
   return {ok:(x>=0&&y>=0&&x<=r.width&&y<=r.height), x:x, y:y, r:r};
 }
 function hitAt(x,y){ // iframe 文档坐标 → 递归穿同源 iframe 命中真实元素
@@ -206,7 +219,7 @@ function applyCtrl(o){
   }
   el=hitAt(p.x,p.y)||activeInFrame();
   if(ev==='click'){ ctrl.down=true; fire(el,'pointerdown',{clientX:p.x,clientY:p.y,buttons:1}); fire(el,'mousedown',{clientX:p.x,clientY:p.y,buttons:1}); ctrl.lx=p.x; ctrl.ly=p.y; }
-  else if(ev==='up'){ ctrl.down=false; fire(el,'pointerup',{clientX:p.x,clientY:p.y,buttons:0}); fire(el,'mouseup',{clientX:p.x,clientY:p.y,buttons:0}); fire(el,'click',{clientX:p.x,clientY:p.y}); }
+  else if(ev==='up'||ev==='release'){ ctrl.down=false; fire(el,'pointerup',{clientX:p.x,clientY:p.y,buttons:0}); fire(el,'mouseup',{clientX:p.x,clientY:p.y,buttons:0}); if(ev==='up') fire(el,'click',{clientX:p.x,clientY:p.y}); }
   else if(ev==='move'){
     if(ctrl.down){ var dx=p.x-ctrl.lx, dy=p.y-ctrl.ly; fire(el,'wheel',{clientX:p.x,clientY:p.y,dx:dx,dy:dy}); ctrl.lx=p.x; ctrl.ly=p.y; }
     fire(el,'pointermove',{clientX:p.x,clientY:p.y,buttons:ctrl.down?1:0});
