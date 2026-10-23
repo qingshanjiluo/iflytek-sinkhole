@@ -249,6 +249,13 @@ POST   /api/admin/visits         清空访问记录(留痕:时间/IP/路径/码/
 - **开机热点自愈**:`sinkhole-hotspot` 任务改 `hotspot --auto --retry`,无网卡/网卡未枚举时
   最多重试 3 次(每次隔 15 秒)——修开机任务 Last Result=1 后热点不再"静默失败"
 
+**v10.2.2 真机 E2E 修复(同日)**:新增双 Chrome 真实端到端测试 `test-cast-browser.js`(11 项),
+修出四个此前纸面审查漏掉的硬伤——①投屏页 WS 地址漏 `location.host`(浏览器把 `ws` 当主机名,
+1006 永远连不上);②relay 漏转发 WebRTC 信令 offer/answer/trickle(信令从未通过中继);
+③`.then(iceDone)` 误传 `undefined` 致 ICE 链静默断掉 offer 从未发出;④可见标签页发帧器被
+`document.hidden` 门死(平板可见时永远黑屏)。修后 11/11 全绿:双端连通、投屏、WebRTC
+connected、1280px 画面送达、反控光标闭环。
+
 ## 已知限制
 
 - 浏览器 DoH(安全 DNS)/安卓私有 DNS/写死公共 DNS 的设备会绕过拦截
