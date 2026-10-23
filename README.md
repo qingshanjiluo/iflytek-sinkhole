@@ -265,6 +265,13 @@ connected、1280px 画面送达、反控光标闭环。
 USB 总线物理掉线,给出换主板直连口/避前置面板建议);只动无线网卡(过滤虚拟/Hyper-V/WAN Miniport),
 不碰代理、不动任务、不碰服务进程。Win10+ 走 pnputil,Win7 回退 wmic 解析。
 
+**v10.3.2 平板身份鉴权链路 E2E(同日)**:新增 `test-cast-auth-e2e.js`(14 项)——用
+`X-Forwarded-For: 192.168.137.69` 模拟平板(绕过本机管理员豁免),端到端验证两种模式的真实
+入口:`/cast` 与 `/p/` 无会话 302→`/auth/login?next=本路径`;WS `/ws/cast` 未登录 401 拒建连;
+表单/JSON 登录成功拿 `relay_sid` 回跳 `/cast` 200;带 cookie 的 WS 握手 101;错误密码 401;
+`next=//evil` 开放重定向被 `safeNext` 拦回 `/relay`。测试结束自动还原 `storage/sessions.json`,
+不污染活服务会话库。回归:语法×8 + 原生投屏 E2E 12/12 + 本测试 14/14。
+
 ## 已知限制
 
 - 浏览器 DoH(安全 DNS)/安卓私有 DNS/写死公共 DNS 的设备会绕过拦截
