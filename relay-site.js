@@ -798,8 +798,9 @@ function handleCliText(raw, cli) {
 /* ---------- 投屏(模式2):电脑开页 /cast/host → JPEG 帧流到平板 /cast,反向点按/拖动/键盘 ----------
    协议(WS /ws/cast,JSON 文本 + 二进制帧):
    投屏台→: 二进制=JPEG 画面帧; {t:'join',url,w,h} 上线; {t:'nav',url} 页面切了; {t:'dim',w,h} 尺寸
+            {t:'offer',sdp} WebRTC offer(→全部观看者); {t:'trickle',cand}
    观看者→: {t:'ctrl',ev:'click'|'move'|'drag'|'wheel'|'key'|'back'|'reload',rx,ry,dx,dy,text,key}
-            {t:'nav',url} 地址栏导航(经投屏台走 /p/)
+            {t:'nav',url} 地址栏导航(经投屏台走 /p/); {t:'vanswer',sdp} WebRTC answer(→投屏台); {t:'trickle',cand}
    服务端→: {t:'state',url,host,w,h} 状态; {t:'hostoff'}; {t:'joined',viewers,url}; {t:'vcount',n} */
 const cast = { host: null, viewers: new Set(), url: '', w: 0, h: 0, lastNav: 0 };
 function castSend(cli, obj) { try { cli.socket.write(wsFrame(JSON.stringify(obj))); } catch {} }
@@ -835,9 +836,22 @@ function castOnText(cli, raw) {
     if (o.t === 'nav') { cast.url = String(o.url || '').slice(0, 2048); castToViewers(castStateMsg()); return; }
     if (o.t === 'dim') { cast.w = +o.w | 0; cast.h = +o.h | 0; castToViewers(castStateMsg()); return; }
     if (o.t === 'ping') { castSend(cli, { t: 'pong', ts: +o.ts || 0 }); return; }
+    if (o.t === 'offer') { // WebRTC 信令:host 的 SDP offer → 全部观看者(v10.2.2 修复:此前漏转发,viewer 永远收不到 offer)
+      const sdp = String(o.sdp || '').slice(0, 64 * 1024);
+      log(`[CAST] offer ${sdp.length}B → viewers ${cast.viewers.size}`);
+      if (sdp) castToViewers({ t: 'offer', sdp });
+      return;
+    }
+    if (o.t === 'trickle') { const c = String(o.cand || '').slice(0, 4096); if (c) castToViewers({ t: 'trickle', cand: c }); return; }
     return;
   }
   // 观看者 →
+  if (o.t === 'vanswer') { // WebRTC 信令:viewer 的 SDP answer → 投屏台(v10.2.2 修复:此前漏转发,host 永远停在 have-local-offer)
+    const sdp = String(o.sdp || '').slice(0, 64 * 1024);
+    if (sdp) castToHost({ t: 'vanswer', sdp });
+    return;
+  }
+  if (o.t === 'trickle') { const c = String(o.cand || '').slice(0, 4096); if (c) castToHost({ t: 'trickle', cand: c }); return; }
   if (o.t === 'ctrl') {
     if (now - cli.lastCtrl < 20) return; // ≤50 次/秒,防事件风暴
     cli.lastCtrl = now;
@@ -875,6 +889,7 @@ function wsCastAccept(req, socket) {
   const q = new URL(req.url, 'http://x').searchParams;
   const role = String(q.get('role') || '') === 'host' ? 'host' : 'view';
   const cli = { socket, role, ip: clientIp(req), buf: Buffer.alloc(0), lastCtrl: 0, closed: false };
+  log(`[CAST] ws握手完成 role=${role} ${cli.ip}`);
   if (role === 'host') {
     if (cast.host && cast.host !== cli) { cast.host.closed = true; try { cast.host.socket.destroy(); } catch {} }
     cast.host = cli;

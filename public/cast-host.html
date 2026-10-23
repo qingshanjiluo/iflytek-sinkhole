@@ -76,7 +76,7 @@ function send(o){ if(ws&&ws.readyState===1){ try{ ws.send(JSON.stringify(o)); }c
 function flushQ(){ var q=sendQ; sendQ=[]; for(var i=0;i<q.length;i++) send(q[i]); }
 function ensureWs(){
   if(ws&&(ws.readyState===0||ws.readyState===1)) return;
-  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+'/ws/cast?role=host');
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/cast?role=host'); // 必须带 location.host:仅写 'ws://'+相对路径会被解析成主机名"ws"导致 1006
   ws.onopen=function(){ setSt('已连接中继站','ok'); flushQ(); send({t:'join',url:'',w:innerWidth,h:innerHeight}); };
   ws.onmessage=function(e){ handle(JSON.parse(e.data)); };
   ws.onclose=function(){ setSt('连接断开,2秒后重连…','bad'); setTimeout(ensureWs,2000); };
@@ -217,7 +217,7 @@ function applyCtrl(o){
     if(o.text){ typeInto(o.text); return; }
     return;
   }
-  el=hitAt(p.x,p.y)||activeInFrame();
+  el=hitAt(p.x,p.y)||f; // 跨域 iframe(hitAt 读不到 contentDocument)时退到 iframe 元素本身——绝不能落回宿主页 activeElement 误点工具栏
   if(ev==='click'){ ctrl.down=true; fire(el,'pointerdown',{clientX:p.x,clientY:p.y,buttons:1}); fire(el,'mousedown',{clientX:p.x,clientY:p.y,buttons:1}); ctrl.lx=p.x; ctrl.ly=p.y; }
   else if(ev==='up'||ev==='release'){ ctrl.down=false; fire(el,'pointerup',{clientX:p.x,clientY:p.y,buttons:0}); fire(el,'mouseup',{clientX:p.x,clientY:p.y,buttons:0}); if(ev==='up') fire(el,'click',{clientX:p.x,clientY:p.y}); }
   else if(ev==='move'){
@@ -252,11 +252,11 @@ function startCast(){
     dc.binaryType='arraybuffer';
     dc.onopen=function(){ meta.textContent='画面已推流 · 平板打开 /cast 查看'; ensureHiddenFrames(); };
     dc.onclose=function(){};
-    pc.createOffer().then(function(o){ return pc.setLocalDescription(o); }).then(iceDone).then(function(){
+    pc.createOffer().then(function(o){ return pc.setLocalDescription(o); }).then(function(){ return iceDone(pc); }).then(function(){
       send({t:'offer',sdp:pc.localDescription.sdp});
       gotAns=false; clearTimeout(ansT);
       ansT=setTimeout(function(){ if(!gotAns) setSt('平板端未应答(观看页没开?)','bad'); },8000);
-    });
+    }).catch(function(e){ setSt('信令失败:'+(e&&e.message||e),'bad'); });
   }).catch(function(e){
     setSt('未开始投屏','bad');
     toast('投屏被取消或不支持: '+(e&&e.message||e.name||''));
@@ -271,12 +271,13 @@ function stopCast(){
   capP.textContent='未投屏'; capP.className='pill';
   if(hidIv){ clearInterval(hidIv); hidIv=0; }
 }
-/* 后台标签节流补偿:rAF 被压到 2fps 时,用定时器把 <video> 画面抽帧直推(不走 canvas.toBlob,零编码开销由 JPEG 编码器负责) */
+/* 帧推送:可见标签页也必须发帧(此前唯一发帧器被 document.hidden 门死=可见时平板永远黑屏);
+   定时器 80ms≈12fps,标签页切后台后由浏览器自动节流到 ~1s/帧(仍可用) */
 function ensureHiddenFrames(){
   if(hidIv) return;
   var lastW=0,lastH=0,cnv=document.createElement('canvas'),cx=cnv.getContext('2d');
   hidIv=setInterval(function(){
-    if(!track||!dc||dc.readyState!=='open'||!document.hidden) return;
+    if(!track||!dc||dc.readyState!=='open') return;
     var w=v.videoWidth,h=v.videoHeight;
     if(!w||!h) return;
     var scale=Math.min(1,1280/w);
@@ -291,7 +292,7 @@ function ensureHiddenFrames(){
         r.readAsArrayBuffer(b);
       },'image/jpeg',0.55);
     }catch(e){}
-  },240);
+  },80);
 }
 
 /* ---------- 入口交互 ---------- */

@@ -72,7 +72,7 @@ function showFrames(){ if($('ph').style.display==='none') return; showPh(false);
 /* ---------- WS ---------- */
 function ensureWs(){
   if(ws&&(ws.readyState===0||ws.readyState===1)) return;
-  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+'/ws/cast?role=view');
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/cast?role=view'); // 必须带 location.host(同 cast-host:缺 host 会 1006)
   ws.binaryType='arraybuffer';
   ws.onopen=function(){ setSt('已连接','ok'); flushQ(); showPh(true); };
   ws.onmessage=function(e){
@@ -135,9 +135,9 @@ function startViewer(sdp){
   };
   pc.setRemoteDescription({type:'offer',sdp:sdp}).then(function(){
     return pc.createAnswer();
-  }).then(function(o){ return pc.setLocalDescription(o); }).then(iceDone).then(function(){
+  }).then(function(o){ return pc.setLocalDescription(o); }).then(function(){ return iceDone(pc); }).then(function(){
     send({t:'vanswer',sdp:pc.localDescription.sdp});
-  }).catch(function(e){ setSt('画面协商失败','bad'); });
+  }).catch(function(e){ setSt('画面协商失败:'+(e&&e.message||e),'bad'); });
 }
 var hasFrames=false;
 function draw(buf){
