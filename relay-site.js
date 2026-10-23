@@ -795,8 +795,165 @@ function handleCliText(raw, cli) {
   pushMsg({ from: cli.name, text, ts: now });
 }
 
+/* ---------- 投屏(模式2):电脑开页 /cast/host → JPEG 帧流到平板 /cast,反向点按/拖动/键盘 ----------
+   协议(WS /ws/cast,JSON 文本 + 二进制帧):
+   投屏台→: 二进制=JPEG 画面帧; {t:'join',url,w,h} 上线; {t:'nav',url} 页面切了; {t:'dim',w,h} 尺寸
+   观看者→: {t:'ctrl',ev:'click'|'move'|'drag'|'wheel'|'key'|'back'|'reload',rx,ry,dx,dy,text,key}
+            {t:'nav',url} 地址栏导航(经投屏台走 /p/)
+   服务端→: {t:'state',url,host,w,h} 状态; {t:'hostoff'}; {t:'joined',viewers,url}; {t:'vcount',n} */
+const cast = { host: null, viewers: new Set(), url: '', w: 0, h: 0, lastNav: 0 };
+function castSend(cli, obj) { try { cli.socket.write(wsFrame(JSON.stringify(obj))); } catch {} }
+function castToViewers(obj) { for (const v of cast.viewers) castSend(v, obj); }
+function castToHost(obj) { if (cast.host && !cast.host.closed) castSend(cast.host, obj); }
+function castStateMsg() { return { t: 'state', url: cast.url, host: !!cast.host, w: cast.w, h: cast.h }; }
+function castDrop(cli) {
+  if (cli.closed) return;
+  cli.closed = true;
+  if (cli.role === 'host') {
+    if (cast.host === cli) cast.host = null;
+    castToViewers({ t: 'hostoff' });
+    log('[CAST] 投屏台断开');
+  } else {
+    cast.viewers.delete(cli);
+    if (cast.host) castSend(cast.host, { t: 'vcount', n: cast.viewers.size });
+  }
+  try { cli.socket.destroy(); } catch {}
+}
+function castOnText(cli, raw) {
+  let o; try { o = JSON.parse(raw); } catch { return; }
+  if (!o || typeof o !== 'object') return;
+  const now = Date.now();
+  if (cli.role === 'host') {
+    if (o.t === 'join') {
+      if (typeof o.url === 'string' && o.url) cast.url = o.url.slice(0, 2048);
+      if (+o.w > 0) { cast.w = +o.w | 0; cast.h = +o.h | 0; }
+      log(`[CAST] 投屏台上线 ${cli.ip} (${cast.w}x${cast.h}, 观看 ${cast.viewers.size})`);
+      castToViewers(castStateMsg());
+      castSend(cli, { t: 'vcount', n: cast.viewers.size });
+      return;
+    }
+    if (o.t === 'nav') { cast.url = String(o.url || '').slice(0, 2048); castToViewers(castStateMsg()); return; }
+    if (o.t === 'dim') { cast.w = +o.w | 0; cast.h = +o.h | 0; castToViewers(castStateMsg()); return; }
+    if (o.t === 'ping') { castSend(cli, { t: 'pong', ts: +o.ts || 0 }); return; }
+    return;
+  }
+  // 观看者 →
+  if (o.t === 'ctrl') {
+    if (now - cli.lastCtrl < 20) return; // ≤50 次/秒,防事件风暴
+    cli.lastCtrl = now;
+    if (cast.host) castSend(cast.host, {
+      t: 'ctrl', ev: String(o.ev || '').slice(0, 16),
+      rx: +o.rx || 0, ry: +o.ry || 0, dx: +o.dx || 0, dy: +o.dy || 0,
+      key: String(o.key || '').slice(0, 32), text: String(o.text || '').slice(0, 128),
+    });
+    return;
+  }
+  if (o.t === 'nav') {
+    const u = String(o.url || '').trim().slice(0, 2048);
+    if (!u || now - cast.lastNav < 600) return;
+    cast.lastNav = now;
+    cast.url = u;
+    castToHost({ t: 'nav', url: u });
+    castToViewers({ t: 'state', url: u, host: !!cast.host, w: cast.w, h: cast.h });
+    log(`[CAST] ${cli.ip} 导航 → ${u.slice(0, 80)}`);
+    return;
+  }
+}
+function wsCastAccept(req, socket) {
+  const key = req.headers['sec-websocket-key'];
+  if (!key) return socket.destroy();
+  if (!requireAuth(req) || !hasPerm(req, 'web')) { // 与 /p/ 同权限门槛
+    try { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); } catch {}
+    return socket.destroy();
+  }
+  const accept = crypto.createHash('sha1').update(key + WS_MAGIC).digest('base64');
+  socket.write(
+    'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
+    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
+  );
+  socket.setNoDelay(true);
+  const q = new URL(req.url, 'http://x').searchParams;
+  const role = String(q.get('role') || '') === 'host' ? 'host' : 'view';
+  const cli = { socket, role, ip: clientIp(req), buf: Buffer.alloc(0), lastCtrl: 0, closed: false };
+  if (role === 'host') {
+    if (cast.host && cast.host !== cli) { cast.host.closed = true; try { cast.host.socket.destroy(); } catch {} }
+    cast.host = cli;
+    castSend(cli, { t: 'joined', viewers: cast.viewers.size, url: cast.url });
+    castToViewers(castStateMsg());
+  } else {
+    cast.viewers.add(cli);
+    castSend(cli, castStateMsg());
+    if (cast.host) castSend(cast.host, { t: 'vcount', n: cast.viewers.size });
+    log(`[CAST] 观看者上线 ${cli.ip} (在线 ${cast.viewers.size})`);
+  }
+  socket.on('data', (d) => {
+    cli.buf = Buffer.concat([cli.buf, d]);
+    let b = cli.buf;
+    while (b.length >= 2) {
+      const b0 = b[0], b1 = b[1];
+      const op = b0 & 0x0f;
+      if (!(b1 & 0x80)) return castDrop(cli); // 浏览器帧必须带掩码
+      let len = b1 & 0x7f, off = 2;
+      if (len === 126) { if (b.length < 4) break; len = b.readUInt16BE(2); off = 4; }
+      else if (len === 127) {
+        if (b.length < 10) break;
+        const big = b.readBigUInt64BE(2);
+        const cap = cli.role === 'host' ? 4 * 1024 * 1024 : 8 * 1024;
+        if (Number(big) > cap) return castDrop(cli); // 投屏台 JPEG 帧≤4MB;观看者只许 8KB 控制帧
+        len = Number(big); off = 10;
+      }
+      if (b.length < off + 4 + len) break;
+      const mask = b.subarray(off, off + 4);
+      const payload = Buffer.from(b.subarray(off + 4, off + 4 + len));
+      for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
+      b = b.subarray(off + 4 + len);
+      if (op === 8) return castDrop(cli);
+      if (op === 9) { try { cli.socket.write(wsFrame(payload, 10)); } catch {} }
+      else if (op === 1) castOnText(cli, payload.toString('utf8'));
+      else if (op === 2 && role === 'host') {
+        // 投屏台 JPEG 帧 → 广播全部观看者;背压>4MB 的观众丢帧,不拖垮投屏台
+        const frame = wsFrame(payload, 2);
+        for (const v of cast.viewers) {
+          if (v.closed) continue;
+          try { if (v.socket.writableLength < 4 * 1024 * 1024) v.socket.write(frame); } catch {}
+        }
+      }
+    }
+    cli.buf = b;
+  });
+  socket.on('error', () => castDrop(cli));
+  socket.on('close', () => castDrop(cli));
+}
+
 /* ---------- 网页转发浏览(/p/<url>) ---------- */
 function browsePrefix(abs) { return '/p/' + encodeURIComponent(abs); }
+
+/* SSRF 基线:/p/ 只当中转(公网页面是既定设计),内网/本机地址一律拒绝——
+   防把局域网设备(路由器/光猫/摄像头/云元数据/本机)经中继站代理访问(会带中继站的网络身份回包)。
+   纯内网主机名(无点)与 .local/.lan 等后缀也拒。模式2 投屏导航同样经 /p/ → 同一闸门。 */
+function isPrivateUrl(raw) {
+  try {
+    const pu = new URL(raw);
+    if (pu.protocol !== 'http:' && pu.protocol !== 'https:') return false;
+    const h = pu.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    const ip4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+    if (h === 'localhost' || h === 'metadata.google.internal') return true;
+    if (ip4) {
+      const a = +ip4[1], b = +ip4[2];
+      return a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+    }
+    if (h.indexOf(':') !== -1) return h === '::1' || h.indexOf('fe80') === 0 || h.indexOf('fc') === 0 || h.indexOf('fd') === 0;
+    if (h.indexOf('.') === -1) return true; // 纯主机名=内网设备名
+    return /\.(local|lan|internal|home|corp)$/.test(h);
+  } catch { return false; }
+}
+function servePublic(res, name) {
+  fs.readFile(path.join(root, 'public', name), (err, buf) => {
+    if (err) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }); return res.end('404 缺文件: ' + name + '(拷贝整个文件夹时带上 public\\)'); }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(buf);
+  });
+}
 function escHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 function rewriteCss(css, baseUrl) {
@@ -1324,30 +1481,18 @@ const router = (req, res) => {
       try { decoded = decodeURIComponent(p.slice(3)); } catch { decoded = p.slice(3); }
       if (url.search && !decoded.includes('?')) decoded += url.search; // 手打未编码场景
       if (!/^https?:\/\//i.test(decoded)) decoded = 'http://' + decoded;
-      // SSRF 基线：/p/ 只当中转（公网页面是既定设计），内网/本机地址一律拒绝——
-      // 防把局域网设备（路由器 192.168.1.1、光猫、摄像头、云元数据 169.254.169.254、本机 127/本机名）
-      // 经中继站代理访问（会带中继站的网络身份回包）。纯内网主机名(无点)也拒。
-      {
-        let bad = false;
-        try {
-          const pu = new URL(decoded);
-          if (pu.protocol === 'http:' || pu.protocol === 'https:') {
-            const h = pu.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-            const ip4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
-            if (h === 'localhost' || h === 'metadata.google.internal') bad = true;
-            else if (ip4) {
-              const a = +ip4[1], b = +ip4[2];
-              bad = (a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) ||
-                (a === 192 && b === 168) || (a === 169 && b === 254));
-            } else if (h.indexOf(':') !== -1) bad = (h === '::1' || h.indexOf('fe80') === 0 || h.indexOf('fc') === 0 || h.indexOf('fd') === 0);
-            else if (h.indexOf('.') === -1) bad = true; // 纯主机名=内网设备名(如路由器/iot)
-            else bad = /\.(local|lan|internal|home|corp)$/.test(h);
-          }
-        } catch {}
-        if (bad) return browseErr(res, '转发不支持内网/本机地址（防 SSRF：内网设备管理页请直接访问原地址，不经中继代理）。', decoded);
-      }
+      if (isPrivateUrl(decoded)) return browseErr(res, '转发不支持内网/本机地址（防 SSRF：内网设备管理页请直接访问原地址，不经中继代理）。', decoded);
       if (req.method === 'GET' || req.method === 'POST') return handleBrowse(req, res, decoded);
       return json(res, 405, { error: 'method not allowed' });
+    }
+    // 模式2 投屏页面:/cast=观看者(平板) /cast/host=投屏台(电脑开页)
+    if (p === '/cast' && req.method === 'GET') {
+      if (!requireAuth(req)) return redirect(res, '/auth/login?next=' + encodeURIComponent(req.url));
+      return servePublic(res, 'cast.html');
+    }
+    if (p === '/cast/host' && req.method === 'GET') {
+      if (!requireAuth(req)) return redirect(res, '/auth/login?next=' + encodeURIComponent(req.url));
+      return servePublic(res, 'cast-host.html');
     }
     if (p === '/api/chat/clear' && req.method === 'POST') {
       if (!canAdmin(req)) return json(res, 403, { error: '仅管理员可清空聊天(本机访问即管理员)' });
@@ -1446,6 +1591,7 @@ function start(config, logger) {
   srv.on('upgrade', (req, socket) => {
     let p = '/';
     try { p = new URL(req.url, 'http://x').pathname; } catch {}
+    if (p === '/ws/cast') return wsCastAccept(req, socket);
     if (p === '/ws/chat') return wsAccept(req, socket);
     socket.destroy();
   });

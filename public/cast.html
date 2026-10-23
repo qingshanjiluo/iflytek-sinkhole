@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>投屏观看 · iflytek-sinkhole</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:#070a0d;color:#d7e1ea;font:14px/1.5 "Microsoft YaHei",system-ui,sans-serif;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+header{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(16,22,29,.94);border-bottom:1px solid #1e2a36;z-index:20;backdrop-filter:blur(4px)}
+.brand{font-weight:700;color:#ff5f56;font-size:14px;letter-spacing:1px}
+.pill{font-size:11px;padding:3px 9px;border-radius:999px;background:#1a2733;color:#9fb2c4;border:1px solid #2a3b4d;white-space:nowrap}
+.pill.ok{color:#64d98b;border-color:#2b6b46}
+.pill.bad{color:#ff8080;border-color:#7a3030}
+#url{flex:1;min-width:0;font:11px/1.3 Consolas,monospace;color:#7d8f9f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+.sp{flex:1}
+header button{background:#1c2a38;color:#cfe0ef;border:1px solid #2d4256;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
+header button:active{background:#2d4256}
+main{position:absolute;inset:0;padding-top:34px;padding-bottom:46px;display:flex;align-items:center;justify-content:center}
+canvas#cv{max-width:100%;max-height:100%;background:#000;display:none;image-rendering:auto}
+video#v{display:none}
+#ph{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);text-align:center;color:#7d8f9f;font-size:14px;line-height:2;max-width:86%}
+#ph .big{font-size:42px}
+footer{position:fixed;left:0;right:0;bottom:0;display:flex;gap:6px;padding:7px 8px;background:rgba(16,22,29,.96);border-top:1px solid #1e2a36;z-index:20;overflow-x:auto}
+footer button{flex:1;min-width:64px;background:#1c2a38;color:#cfe0ef;border:1px solid #2d4256;border-radius:8px;padding:9px 4px;font-size:13px;cursor:pointer}
+footer button:active{background:#3d7fb8}
+#kb{position:fixed;left:0;right:0;bottom:44px;z-index:21;background:#10161d;border-top:1px solid #1e2a36;padding:6px;display:none}
+#kb input{width:100%;background:#131c25;border:1px solid #243343;color:#d7e1ea;border-radius:6px;padding:9px 10px;font-size:16px;outline:none}
+#navbox{position:fixed;left:8px;right:8px;top:40px;z-index:21;background:#10161d;border:1px solid #2d4256;border-radius:10px;padding:8px;display:none;gap:6px}
+#navbox input{flex:1;background:#131c25;border:1px solid #243343;color:#d7e1ea;border-radius:6px;padding:8px 10px;font-size:14px;outline:none}
+#navbox button{background:#c23b32;color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:13px}
+#toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%);background:#1c2a38;color:#d7e1ea;border:1px solid #2d4256;padding:8px 16px;border-radius:8px;font-size:13px;z-index:99;display:none}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">🖥 投屏</span>
+  <span class="pill" id="stP">连接中…</span>
+  <span id="url" title="电脑当前页面"></span>
+  <button id="openSelf" type="button" title="在本机直接打开电脑当前页面(模式1)">↗</button>
+</header>
+<main>
+  <canvas id="cv"></canvas>
+  <div id="ph"><div class="big">📡</div><div id="phT">等待电脑投屏…</div><div style="font-size:12px">电脑打开 <b style="color:#ffb86b">/cast/host</b> → 输入网址 → 点「● 开始投屏」<br>共享选择器里选「当前标签页」</div></div>
+</main>
+<div id="navbox"><input id="navIn" placeholder="让电脑打开这个网址…" spellcheck="false"><button id="navGo">打开</button></div>
+<div id="kb"><input id="kbIn" placeholder="输入文字,回车发送到电脑页面…" autocomplete="off"></div>
+<footer>
+  <button id="bBack" type="button">← 后退</button>
+  <button id="bReload" type="button">↻ 刷新</button>
+  <button id="bUp" type="button">⬆ 滚上</button>
+  <button id="bDown" type="button">⬇ 滚下</button>
+  <button id="bNav" type="button">🌐 网址</button>
+  <button id="bKb" type="button">⌨ 打字</button>
+  <button id="bEsc" type="button">⎋ Esc</button>
+</footer>
+<video id="v" autoplay playsinline muted></video>
+<div id="toast"></div>
+<script>
+'use strict';
+function $(id){ return document.getElementById(id); }
+var stP=$('stP'), cv=$('cv'), cx=cv.getContext('2d'), v=$('v');
+var ws=null, sendQ=[], pc=null, lastUrl='', hostOn=false, curUrl='';
+function toast(t){ var e=$('toast'); e.textContent=t; e.style.display='block'; clearTimeout(e._t); e._t=setTimeout(function(){ e.style.display='none'; },2400); }
+function setSt(t,c){ stP.textContent=t; stP.className='pill '+(c||''); }
+function send(o){ if(ws&&ws.readyState===1){ try{ ws.send(JSON.stringify(o)); return; }catch(e){} } sendQ.push(o); if(sendQ.length>48) sendQ.shift(); }
+function sendCtrl(extra){ send(Object.assign({t:'ctrl'},extra||{})); }
+function showPh(on,t){ $('ph').style.display=on?'block':'none'; if(t) $('phT').textContent=t; cv.style.display=on?'none':'block'; }
+function showFrames(){ if($('ph').style.display==='none') return; showPh(false); }
+
+/* ---------- WS ---------- */
+function ensureWs(){
+  if(ws&&(ws.readyState===0||ws.readyState===1)) return;
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+'/ws/cast?role=view');
+  ws.binaryType='arraybuffer';
+  ws.onopen=function(){ setSt('已连接','ok'); flushQ(); showPh(true); };
+  ws.onmessage=function(e){
+    if(typeof e.data==='string'){ handle(JSON.parse(e.data)); return; }
+    draw(e.data);
+  };
+  ws.onclose=function(){ setSt('已断开,重连…','bad'); pc&&pc.close(); pc=null; setTimeout(ensureWs,2000); };
+  ws.onerror=function(){};
+}
+function flushQ(){ var q=sendQ; sendQ=[]; for(var i=0;i<q.length;i++) send(q[i]); }
+function handle(o){
+  if(!o||!o.t) return;
+  if(o.t==='state'){
+    hostOn=!!o.host;
+    curUrl=o.url||'';
+    $('url').textContent=curUrl?('📄 '+decodeURIComponent(curUrl.replace(/^\/p\//,'')).slice(0,60)):'(电脑未打开页面)';
+    if(!hostOn) showPh(true,'投屏台不在线\n(电脑打开 /cast/host 并点开始投屏)');
+    else if(!hasFrames) showPh(true,'投屏台已就绪,等待画面…');
+  }
+  else if(o.t==='hostoff'){ hostOn=false; hasFrames=false; showPh(true,'投屏已结束'); }
+  else if(o.t==='offer'){
+    hasFrames=false;
+    startViewer(o.sdp);
+  }
+  else if(o.t==='trickle'){ if(pc&&o.cand){ try{ pc.addIceCandidate(JSON.parse(o.cand)).catch(function(){}); }catch(e){} } }
+}
+function normViewerUrl(u){
+  if(!u) return '';
+  if(!/^https?:\/\//i.test(u)) u='http://'+u;
+  try{
+    var pu=new URL(u), h=pu.hostname;
+    if(h==='localhost') return '';
+    if(/^\d{1,3}(\.\d{1,3}){3}$/.test(h)){ var q=h.split('.'),a=+q[0],b=+q[1];
+      if(a===127||a===10||a===0||(a===172&&b>=16&&b<=31)||(a===192&&b===168)||(a===169&&b===254)) return ''; }
+    else if(h.indexOf(':')!==-1||h.indexOf('.')===-1||/\.(local|lan|internal|home|corp)$/i.test(h)) return '';
+    return '/p/'+encodeURIComponent(pu.href);
+  }catch(e){ return ''; }
+}
+$('openSelf').onclick=function(){
+  if(!curUrl) return toast('电脑还没打开页面');
+  var r=normViewerUrl(curUrl);
+  if(r) location.href=r;
+  else { var u=/^https?:\/\//i.test(curUrl)?curUrl:'http://'+curUrl; location.href=u; }
+};
+
+/* ---------- WebRTC 收画面 ---------- */
+function iceDone(p){ return new Promise(function(res){
+  if(p.iceGatheringState==='complete') return res();
+  var to=setTimeout(res,1500);
+  p.addEventListener('icegatheringstatechange',function(){ if(p.iceGatheringState==='complete'){ clearTimeout(to); res(); } });
+}); }
+function startViewer(sdp){
+  if(pc){ try{ pc.close(); }catch(e){} }
+  pc=new RTCPeerConnection({iceServers:[]});
+  pc.ontrack=function(e){ v.srcObject=e.streams[0]; v.play().catch(function(){}); };
+  pc.onconnectionstatechange=function(){
+    if(!pc) return;
+    if(pc.connectionState==='connected'){ setSt('画面接收中','ok'); showFrames(); }
+    else if(pc.connectionState==='failed'){ hasFrames=false; setSt('画面通道失败','bad'); }
+  };
+  pc.setRemoteDescription({type:'offer',sdp:sdp}).then(function(){
+    return pc.createAnswer();
+  }).then(function(o){ return pc.setLocalDescription(o); }).then(iceDone).then(function(){
+    send({t:'vanswer',sdp:pc.localDescription.sdp});
+  }).catch(function(e){ setSt('画面协商失败','bad'); });
+}
+var hasFrames=false;
+function draw(buf){
+  try{
+    var blob=new Blob([buf],{type:'image/jpeg'});
+    var url=URL.createObjectURL(blob);
+    var img=new Image();
+    img.onload=function(){
+      if(cv.width!==img.naturalWidth||cv.height!==img.naturalHeight){ cv.width=img.naturalWidth; cv.height=img.naturalHeight; }
+      cx.drawImage(img,0,0);
+      URL.revokeObjectURL(url);
+      if(!hasFrames){ hasFrames=true; showFrames(); }
+    };
+    img.onerror=function(){ URL.revokeObjectURL(url); };
+    img.src=url;
+  }catch(e){}
+}
+
+/* ---------- 输入:相对比例 → ctrl ---------- */
+function rel(e){
+  var r=cv.getBoundingClientRect();
+  var cxp=(e.clientX-r.left)/(r.width||1), cyp=(e.clientY-r.top)/(r.height||1);
+  return {rx:Math.max(0,Math.min(1,cxp)), ry:Math.max(0,Math.min(1,cyp))};
+}
+var drag={on:false,moved:0,sx:0,sy:0,lt:0};
+cv.addEventListener('pointerdown',function(e){
+  cv.setPointerCapture&&cv.setPointerCapture(e.pointerId);
+  drag.on=true; drag.moved=0; drag.sx=e.clientX; drag.sy=e.clientY; drag.lt=Date.now();
+  var p=rel(e);
+  sendCtrl({ev:'click',rx:p.rx,ry:p.ry});
+});
+cv.addEventListener('pointermove',function(e){
+  if(!drag.on) return;
+  drag.moved+=Math.abs(e.movementX||0)+Math.abs(e.movementY||0);
+  var now=Date.now(); if(now-drag.lt<30) return; drag.lt=now;
+  var p=rel(e); sendCtrl({ev:'move',rx:p.rx,ry:p.ry});
+});
+cv.addEventListener('pointerup',function(e){
+  if(!drag.on) return;
+  drag.on=false;
+  var p=rel(e);
+  if(drag.moved<8&&Date.now()-drag.lt<320) sendCtrl({ev:'up',rx:p.rx,ry:p.ry});
+  else sendCtrl({ev:'up',rx:p.rx,ry:p.ry});
+  var lastTap=0;
+  var now=Date.now();
+  if(now-lastTap<300) sendCtrl({ev:'dbl',rx:p.rx,ry:p.ry});
+  lastTap=now;
+});
+cv.addEventListener('dblclick',function(e){ var p=rel(e); sendCtrl({ev:'dbl',rx:p.rx,ry:p.ry}); });
+cv.addEventListener('wheel',function(e){ e.preventDefault(); sendCtrl({ev:'wheel',dx:e.deltaX,dy:e.deltaY}); },{passive:false});
+cv.addEventListener('contextmenu',function(e){ e.preventDefault(); });
+
+$('bBack').onclick=function(){ sendCtrl({ev:'back'}); };
+$('bReload').onclick=function(){ sendCtrl({ev:'reload'}); };
+$('bUp').onclick=function(){ sendCtrl({ev:'wheel',dx:0,dy:-480}); };
+$('bDown').onclick=function(){ sendCtrl({ev:'wheel',dx:0,dy:480}); };
+$('bEsc').onclick=function(){ sendCtrl({ev:'key',key:'Escape'}); };
+$('bNav').onclick=function(){
+  var box=$('navbox'); var on=box.style.display==='block';
+  box.style.display=on?'none':'flex';
+  if(!on){ $('navIn').value=decodeURIComponent((curUrl||'').replace(/^\/p\//,'')); $('navIn').focus(); }
+};
+$('navGo').onclick=function(){ var u=$('navIn').value.trim(); if(u){ send({t:'nav',url:u}); $('navbox').style.display='none'; } };
+$('navIn').addEventListener('keydown',function(e){ if(e.key==='Enter'){ var u=$('navIn').value.trim(); if(u){ send({t:'nav',url:u}); $('navbox').style.display='none'; } } });
+$('bKb').onclick=function(){
+  var kb=$('kb'); var on=kb.style.display==='block';
+  kb.style.display=on?'none':'block';
+  if(!on) setTimeout(function(){ $('kbIn').focus(); },50);
+};
+$('kbIn').addEventListener('input',function(){
+  var t=$('kbIn').value; if(!t) return;
+  sendCtrl({ev:'key',text:t,key:t});
+  $('kbIn').value='';
+});
+$('kbIn').addEventListener('keydown',function(e){
+  if(e.key==='Enter'){ sendCtrl({ev:'key',key:'Enter'}); e.preventDefault(); }
+  else if(e.key==='Backspace'){ sendCtrl({ev:'key',key:'Backspace'}); }
+  else if(e.key==='Escape'){ sendCtrl({ev:'key',key:'Escape'}); }
+});
+
+showPh(true);
+ensureWs();
+</script>
+</body>
+</html>

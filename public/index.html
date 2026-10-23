@@ -361,6 +361,16 @@ footer{color:var(--ink-3);font:500 11.5px/2 var(--f-mono);letter-spacing:.04em;t
         <button class="chip-link" data-url="https://news.ycombinator.com">Hacker News</button>
         <button class="chip-link" data-url="https://www.qq.com">腾讯</button>
       </div>
+      <div class="chips">
+        <button class="chip-link" id="modeRelay" style="border-color:#38bdf8">模式1 · 中继直达（本机直接浏览）</button>
+        <button class="chip-link" id="modeCast">模式2 · 电脑开页 → 投屏到本机（可点按/滚动/打字反控）</button>
+      </div>
+      <div class="sec-note">
+        <b>两种模式：</b>模式1=本机浏览器逐页中转（上表地址栏即用）；
+        模式2=在<b>电脑</b>浏览器打开 <code>/cast/host</code> 开页并投屏——本机打开
+        <code>/cast</code>（或点上面模式2）实时看到电脑画面，可点按、拖动滚动、打字反控；
+        电脑没开机投屏时模式2会提示“投屏台不在线”。
+      </div>
       <div class="sec-note">
         中转页顶部有 <b>← 后退 / ↻ 刷新 / 🏠 中继站 / 地址栏</b>;静态资源已缓存提速,
         伪装成常规浏览器 UA,减少被站点拦截。
@@ -770,6 +780,8 @@ function webGo(){
 }
 $('webGo').onclick=webGo;
 $('webUrl').addEventListener('keydown',e=>{ if(e.key==='Enter')webGo(); });
+$('modeRelay').onclick=()=>{ $('webUrl').focus(); $('webUrl').scrollIntoView({block:'center'}); toast('模式1 = 上面的地址栏,本机逐页中转'); };
+$('modeCast').onclick=()=>{ location.href='/cast'; };
 document.querySelectorAll('.chip-link[data-url]').forEach(b=>{
   b.onclick=()=>{ $('webUrl').value=b.dataset.url; webGo(); };
 });

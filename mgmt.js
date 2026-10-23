@@ -466,7 +466,7 @@ function installAll() {
   const nodeQ = `"${NODE}"`;
   const defs = [
     [TASK.svc, `${nodeQ} "${path.join(ROOT, 'index.js')}" ${SVC_FLAG}`, ['/sc', 'onstart', '/delay', '0000:30', '/ru', 'SYSTEM', '/rl', 'HIGHEST']],
-    [TASK.hot, `${nodeQ} "${path.join(ROOT, 'mgmt.js')}" hotspot --auto`, ['/sc', 'onstart', '/delay', '0001:00', '/ru', 'SYSTEM', '/rl', 'HIGHEST']],
+    [TASK.hot, `${nodeQ} "${path.join(ROOT, 'mgmt.js')}" hotspot --auto --retry`, ['/sc', 'onstart', '/delay', '0001:00', '/ru', 'SYSTEM', '/rl', 'HIGHEST']],
     [TASK.keep, `${nodeQ} "${path.join(ROOT, 'keepalive.js')}"`, ['/sc', 'minute', '/mo', '5', '/ru', 'SYSTEM', '/rl', 'HIGHEST']]
   ];
   for (const [name, tr, extra] of defs) {
@@ -681,6 +681,11 @@ async function check(o) {
   const hs = hotspotStatus(); j.hotspot = hs;
   const drvs = wlanDrivers(); const supp = drvs.filter(d => d.supported);
   P(hs.started ? 'OK' : '--', hs.started ? `热点运行中: ${hs.ssid}（客户端 ${hs.clients}）` : '热点未启动');
+  // 热点该开没开 = 局域网设备全体断网（平板"网络错误"第一嫌疑）：NIC 已配/有网卡时主动提示
+  if (!hs.started && supp.length && c.cfg && c.cfg.relay && c.cfg.relay.hotspot && (c.cfg.relay.hotspot.nic || c.cfg.relay.hotspot.ssid)) {
+    P('!!', `热点未启动但 relay.hotspot 已配置（${c.cfg.relay.hotspot.ssid || '默认SSID'} / nic=${c.cfg.relay.hotspot.nic || '自动'}）—— 局域网设备(平板等)此刻连不上网！ 菜单[5]开热点 或 管理台「开热点」`);
+    j.hotspotShouldRun = true;
+  }
   if (supp.length) P('OK', `无线网卡 ${supp.map(d => d.name + (d.supported ? '✓' : '✗')).join(' / ')} 承载网络支持`);
   else if (drvs.length) P('!!', `无线网卡 ${drvs.map(d => d.name).join('/')} 驱动不支持承载网络（或驱动太老）`);
   else P('!!', '未检测到无线网卡（USB 网卡插好了吗？）');
@@ -928,7 +933,16 @@ async function menu() {
       const getOpt = f => { const i = argv.indexOf(f); return i !== -1 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : ''; };
       if (sub === 'off' || sub === 'stop') { const r = await hotspotStop(); console.log(r.msg); process.exit(r.ok ? 0 : 1); }
       if (sub === 'status') { const s = hotspotStatus(); console.log(s.started ? `Started ${s.ssid} clients=${s.clients}` : 'Not started'); process.exit(s.started ? 0 : 3); }
-      const r = await hotspotStart({ ssid: getOpt('--ssid'), key: getOpt('--key'), staSsid: getOpt('--stassid'), staKey: getOpt('--stakey') });
+      const opts = { ssid: getOpt('--ssid'), key: getOpt('--key'), staSsid: getOpt('--stassid'), staKey: getOpt('--stakey') };
+      let r = await hotspotStart(opts);
+      // 开机自动重试:USB 网卡枚举比开机任务慢(实测 10-16 开机任务 Last Result=1,热点没起来→全屋断网)
+      if (has('--retry')) {
+        for (let att = 2; att <= 4 && !r.ok; att++) {
+          await new Promise(res2 => setTimeout(res2, 15000));
+          (r.log = r.log || []).push(`— 开机自动重试 第${att}次(等网卡枚举/驱动就绪) —`);
+          r = await hotspotStart(opts);
+        }
+      }
       (r.log || []).forEach(m => console.log(m));
       if (!r.ok && !(r.log || []).length) console.log('热点启动失败');
       process.exit(r.ok ? 0 : 1);

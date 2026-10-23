@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>投屏台 · iflytek-sinkhole</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0b0f14;color:#d7e1ea;font:14px/1.5 "Microsoft YaHei",system-ui,sans-serif;height:100vh;display:flex;flex-direction:column}
+header{display:flex;align-items:center;gap:12px;padding:8px 14px;background:#10161d;border-bottom:1px solid #1e2a36;flex:0 0 auto}
+.brand{font-weight:700;color:#ff5f56;letter-spacing:1px}
+.brand small{color:#7d8f9f;font-weight:400;margin-left:8px;letter-spacing:0}
+.pill{font:12px/1 "Microsoft YaHei";padding:4px 10px;border-radius:999px;background:#1a2733;color:#9fb2c4;border:1px solid #2a3b4d}
+.pill.ok{color:#64d98b;border-color:#2b6b46}
+.pill.bad{color:#ff8080;border-color:#7a3030}
+.bar{display:flex;gap:6px;padding:8px 14px;background:#0e141b;border-bottom:1px solid #1a242f;flex:0 0 auto;align-items:center;flex-wrap:wrap}
+.bar input{flex:1;min-width:220px;background:#131c25;border:1px solid #243343;color:#d7e1ea;border-radius:6px;padding:7px 10px;font:13px/1.2 Consolas,monospace;outline:none}
+.bar input:focus{border-color:#3d7fb8}
+.bar button{background:#1c2a38;color:#cfe0ef;border:1px solid #2d4256;border-radius:6px;padding:7px 14px;cursor:pointer;font-size:13px}
+.bar button:hover{border-color:#3d7fb8;color:#fff}
+.bar button.pri{background:#c23b32;border-color:#e0574c;color:#fff}
+.bar button.pri:hover{background:#d64a40}
+.bar button.stop{background:#3a1e1e;border-color:#7a3030;color:#ffb3b3}
+.meta{font-size:12px;color:#7d8f9f}
+main{flex:1;min-height:0;position:relative;background:#070a0d}
+iframe#f{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
+video#v{position:absolute;right:10px;bottom:10px;width:200px;max-height:30%;border:2px solid #2d4256;border-radius:8px;background:#000;z-index:5;display:none;pointer-events:none}
+#mc{position:absolute;width:18px;height:18px;border:2px solid #ff5f56;border-radius:50%;pointer-events:none;z-index:6;display:none;transform:translate(-50%,-50%);box-shadow:0 0 8px rgba(255,95,86,.8)}
+#hint{position:absolute;left:50%;top:24px;transform:translateX(-50%);z-index:9;background:#101a24;border:1px solid #2d4256;border-radius:10px;padding:14px 20px;max-width:560px;color:#b9cbdb;font-size:13px;line-height:1.7;box-shadow:0 8px 30px rgba(0,0,0,.6)}
+#hint b{color:#ffb86b}
+#hint .x{float:right;cursor:pointer;color:#7d8f9f;font-size:16px}
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#1c2a38;color:#d7e1ea;border:1px solid #2d4256;padding:8px 16px;border-radius:8px;font-size:13px;z-index:99;display:none}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">📡 投屏台<small>模式2 · 电脑开页 → 平板看画面并反控</small></span>
+  <span class="pill" id="stPill">连接中…</span>
+  <span class="pill" id="capPill">未投屏</span>
+  <span class="pill" id="viewPill">观看者 0</span>
+</header>
+<div class="bar">
+  <input id="u" placeholder="输入网址回车打开(公网经 /p/ 中转,可被平板反控;内网地址直接打开)" spellcheck="false" autocomplete="off">
+  <button id="go" type="button">打开</button>
+  <button id="cast" class="pri" type="button">● 开始投屏</button>
+  <button id="reload" type="button" title="刷新下方页面">↻</button>
+  <button id="back" type="button" title="后退">←</button>
+  <span class="meta" id="meta">平板打开 <b>/cast</b> 即可观看并反控</span>
+</div>
+<main>
+  <iframe id="f" src="about:blank"></iframe>
+  <video id="v" autoplay muted playsinline></video>
+  <div id="mc"></div>
+  <div id="hint"><span class="x" id="hintX">✕</span>
+    <b>三步开投：</b><br>
+    1) 上方地址栏输入网址回车 → 页面在下方打开（公网走 /p/ 中转，平板可反控）；<br>
+    2) 点 <b>● 开始投屏</b> → 浏览器共享选择器弹出 → 选「<b>当前标签页</b>」（或整个窗口）；<br>
+    3) 平板打开 <b>/cast</b>（或中继站首页「模式2」按钮）→ 看到画面，<b>点按 / 拖动滚动 / 打字</b> 都会作用到这个页面。<br>
+    <span style="color:#7d8f9f">提示：本页即使切到后台也会持续发帧；不投屏时平板也能远程点按（黑屏等待画面时仍可操作）。</span>
+  </div>
+  <div id="toast"></div>
+</main>
+<script>
+'use strict';
+function $(id){ return document.getElementById(id); }
+var stP=$('stPill'), capP=$('capPill'), viewP=$('viewPill'), meta=$('meta');
+var ws=null, sendQ=[], track=null, pc=null, dc=null, gotAns=false, ansT=0, hidIv=0;
+var f=$('f'), v=$('v'), mc=$('mc'), vsize={w:16,h:9};
+var ctrl={down:false,lx:0,ly:0}; // 反控状态(在 iframe 页面坐标系)
+
+function toast(t){ var e=$('toast'); e.textContent=t; e.style.display='block'; clearTimeout(e._t); e._t=setTimeout(function(){ e.style.display='none'; },2600); }
+function setSt(t,c){ stP.textContent=t; stP.className='pill '+(c||''); }
+
+/* ---------- WebSocket(控制通道,不经 WebRTC) ---------- */
+function send(o){ if(ws&&ws.readyState===1){ try{ ws.send(JSON.stringify(o)); }catch(e){} } else { sendQ.push(o); if(sendQ.length>64) sendQ.shift(); } }
+function flushQ(){ var q=sendQ; sendQ=[]; for(var i=0;i<q.length;i++) send(q[i]); }
+function ensureWs(){
+  if(ws&&(ws.readyState===0||ws.readyState===1)) return;
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+'/ws/cast?role=host');
+  ws.onopen=function(){ setSt('已连接中继站','ok'); flushQ(); send({t:'join',url:'',w:innerWidth,h:innerHeight}); };
+  ws.onmessage=function(e){ handle(JSON.parse(e.data)); };
+  ws.onclose=function(){ setSt('连接断开,2秒后重连…','bad'); setTimeout(ensureWs,2000); };
+  ws.onerror=function(){};
+}
+function handle(o){
+  if(!o||!o.t) return;
+  if(o.t==='ctrl') applyCtrl(o);
+  else if(o.t==='nav') navTo(o.url);
+  else if(o.t==='vcount') viewP.textContent='观看者 '+o.n;
+  else if(o.t==='vanswer'){
+    gotAns=true; clearTimeout(ansT);
+    if(pc&&o.sdp){ pc.setRemoteDescription({type:'answer',sdp:o.sdp}).catch(function(){}); }
+  }
+  else if(o.t==='trickle'){ if(pc&&o.cand){ try{ pc.addIceCandidate(JSON.parse(o.cand)).catch(function(){}); }catch(e){} } }
+}
+
+/* ---------- 地址栏导航:公网→/p/ 中转(同源 iframe,反控可递归);内网→直开 ---------- */
+function classify(u){
+  if(!u) return null;
+  if(!/^https?:\/\//i.test(u)) u='http://'+u;
+  var pu; try{ pu=new URL(u); }catch(e){ return null; }
+  var h=pu.hostname, priv=false;
+  if(h==='localhost'||h==='metadata.google.internal') priv=true;
+  else if(/^\d{1,3}(\.\d{1,3}){3}$/.test(h)){ var q=h.split('.'),a=+q[0],b=+q[1];
+    priv=(a===127||a===10||a===0||(a===172&&b>=16&&b<=31)||(a===192&&b===168)||(a===169&&b===254)); }
+  else if(h.indexOf(':')!==-1||h.indexOf('.')===-1||/\.(local|lan|internal|home|corp)$/i.test(h)) priv=true;
+  return {raw:pu.href, priv:priv};
+}
+function navTo(u){
+  var c=classify(u); if(!c) return;
+  if(c.priv){ f.src=c.raw; $('u').value=c.raw; syncNav(c.raw); toast('内网地址直开(浏览器本机身份);若设备禁止内嵌则改用模式1'); }
+  else { f.src='/p/'+encodeURIComponent(c.raw); $('u').value=c.raw; syncNav(c.raw); }
+}
+function syncNav(url){ send({t:'nav',url:(url||(f.src||''))}); }
+f.addEventListener('load', function(){
+  // 同源(/p/)页面可读;内网跨域读不到→跳过状态同步
+  try{
+    var d=f.contentDocument;
+    if(d&&d.title) meta.textContent=(d.title.slice(0,30)||'')+' · 平板反控作用于此页面';
+  }catch(e){}
+});
+
+/* ---------- 反控:坐标在 iframe 视口系,递归同源命中,合成事件派发进真实 DOM ---------- */
+function iframePt(rx,ry){ // rx,ry=页面可见区域(含工具条)相对比例 → iframe 内坐标
+  var r=f.getBoundingClientRect();
+  var x=rx*r.width, y=ry*r.height;
+  return {ok:(x>=0&&y>=0&&x<=r.width&&y<=r.height), x:x, y:y, r:r};
+}
+function hitAt(x,y){ // iframe 文档坐标 → 递归穿同源 iframe 命中真实元素
+  var d; try{ d=f.contentDocument; }catch(e){ return null; }
+  if(!d||!d.elementFromPoint) return null;
+  var el=d.elementFromPoint(x,y);
+  for(var i=0; el&&el.tagName==='IFRAME'&&i<6; i++){
+    var sub; try{ sub=el.contentDocument; }catch(e){ break; }
+    if(!sub||!sub.elementFromPoint) break;
+    var rr=el.getBoundingClientRect();
+    x-=rr.left; y-=rr.top;
+    el=sub.elementFromPoint(x,y)||el;
+  }
+  return el;
+}
+function docPt(){ // 事件派发需要"事件所处文档"的坐标:命中元素所属 doc 的视口坐标
+  // 简化:全部按顶层 iframe 文档坐标派发(嵌套 iframe 内时已递归到该 doc,坐标需回退)
+  // 为稳妥,命中后按元素 ownerDocument 换算:
+  return null;
+}
+function fire(el,type,opt){
+  if(!el) return;
+  var d=el.ownerDocument||document;
+  var rect=el.getBoundingClientRect?el.getBoundingClientRect():{left:0,top:0,width:0,height:0};
+  var init={bubbles:true,cancelable:true,composed:true,
+    clientX:(opt&&opt.clientX!=null)?opt.clientX:rect.left+(rect.width||0)/2,
+    clientY:(opt&&opt.clientY!=null)?opt.clientY:rect.top+(rect.height||0)/2,
+    button:0,buttons:(opt&&opt.buttons!=null)?opt.buttons:0,relatedTarget:null};
+  try{
+    if(/^(pointer|mouse|click)/.test(type)){
+      var E=(type.indexOf('pointer')===0&&typeof PointerEvent!=='undefined')?PointerEvent:
+             ((type==='click'||type.indexOf('mouse')===0)?MouseEvent:null);
+      if(E) el.dispatchEvent(new E(type,init));
+      else { var M=document.createEvent('MouseEvents'); M.initMouseEvent(type,true,true,d,1,init.clientX,init.clientY,0,0,false,false,false,false,0,null); el.dispatchEvent(M); }
+    } else if(type==='dblclick'){ el.dispatchEvent(new MouseEvent('dblclick',init)); }
+    else if(type==='wheel'){ el.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,clientX:init.clientX,clientY:init.clientY,deltaX:(opt&&opt.dx)||0,deltaY:(opt&&opt.dy)||0,deltaMode:0})); }
+    else if(type==='keydown'||type==='keyup'){
+      var k=(opt&&opt.key)||'', code=(opt&&opt.code)||0;
+      el.dispatchEvent(new KeyboardEvent(type,{bubbles:true,cancelable:true,key:k,code:code||''}));
+    }
+  }catch(e){}
+}
+function activeInFrame(){ var d; try{ d=f.contentDocument; }catch(e){ return document; } return (d&&d.activeElement)||d||document; }
+function typeInto(text){
+  var t=activeInFrame();
+  if(!t) return;
+  try{
+    if(t.isContentEditable){ document.execCommand&&document.execCommand('insertText',false,text); return; }
+    if('value' in t){
+      var s=t.selectionStart==null?t.value.length:t.selectionStart;
+      var e=t.selectionEnd==null?t.value.length:t.selectionEnd;
+      t.value=t.value.slice(0,s)+text+t.value.slice(e);
+      try{ t.selectionStart=t.selectionEnd=s+text.length; }catch(x){}
+      t.dispatchEvent(new Event('input',{bubbles:true}));
+      return;
+    }
+  }catch(x){}
+  document.execCommand&&document.execCommand('insertText',false,text);
+}
+function applyCtrl(o){
+  var ev=o.ev||'';
+  if(ev==='back'){ try{ f.contentWindow&&f.contentWindow.history.back(); }catch(e){} return; }
+  if(ev==='reload'){ try{ f.contentWindow&&f.contentWindow.location.reload(); }catch(e){ f.src=f.src; } return; }
+  if(ev==='nav'){ navTo(o.url); return; }
+  var p=iframePt(o.rx,o.ry);
+  if(p&&p.ok) { mc.style.left=(f.getBoundingClientRect().left+p.x)+'px'; mc.style.top=(f.getBoundingClientRect().top+p.y)+'px'; mc.style.display='block'; clearTimeout(mc._t); mc._t=setTimeout(function(){ mc.style.display='none'; },1800); }
+  if(!p||!p.ok) { if(ev!=='key') return; }
+  var el;
+  if(ev==='key'){
+    if(o.key==='Enter'){ el=activeInFrame(); if(el&&el.form&&el.requestSubmit){ try{ el.requestSubmit(); return; }catch(e){} } fire(el,'keydown',{key:'Enter',code:'Enter'}); return; }
+    if(o.key==='Backspace'){ el=activeInFrame();
+      if(el&&'value' in el&&el.selectionStart!=null&&el.selectionStart>0){ var s2=el.selectionStart-1; el.value=el.value.slice(0,s2)+el.value.slice(el.selectionEnd); el.selectionStart=el.selectionEnd=s2; el.dispatchEvent(new Event('input',{bubbles:true})); return; }
+      fire(el,'keydown',{key:'Backspace',code:'Backspace'}); return; }
+    if(o.key==='Tab'){ el=activeInFrame(); fire(el,'keydown',{key:'Tab',code:'Tab'}); return; }
+    if(o.key==='Escape'){ fire(activeInFrame(),'keydown',{key:'Escape',code:'Escape'}); return; }
+    if(o.key==='ArrowUp'||o.key==='ArrowDown'||o.key==='ArrowLeft'||o.key==='ArrowRight'){
+      el=activeInFrame(); fire(el,'keydown',{key:o.key,code:o.key.replace('Arrow','Arrow')}); return; }
+    if(o.text){ typeInto(o.text); return; }
+    return;
+  }
+  el=hitAt(p.x,p.y)||activeInFrame();
+  if(ev==='click'){ ctrl.down=true; fire(el,'pointerdown',{clientX:p.x,clientY:p.y,buttons:1}); fire(el,'mousedown',{clientX:p.x,clientY:p.y,buttons:1}); ctrl.lx=p.x; ctrl.ly=p.y; }
+  else if(ev==='up'){ ctrl.down=false; fire(el,'pointerup',{clientX:p.x,clientY:p.y,buttons:0}); fire(el,'mouseup',{clientX:p.x,clientY:p.y,buttons:0}); fire(el,'click',{clientX:p.x,clientY:p.y}); }
+  else if(ev==='move'){
+    if(ctrl.down){ var dx=p.x-ctrl.lx, dy=p.y-ctrl.ly; fire(el,'wheel',{clientX:p.x,clientY:p.y,dx:dx,dy:dy}); ctrl.lx=p.x; ctrl.ly=p.y; }
+    fire(el,'pointermove',{clientX:p.x,clientY:p.y,buttons:ctrl.down?1:0});
+  }
+  else if(ev==='wheel'){ fire(el,'wheel',{clientX:p.x,clientY:p.y,dx:o.dx||0,dy:o.dy||0}); }
+  else if(ev==='dbl'){ fire(el,'dblclick',{clientX:p.x,clientY:p.y}); }
+}
+
+/* ---------- WebRTC:本页自拍 → JPEG 帧 → DC;回程 answer ---------- */
+function iceDone(p){ return new Promise(function(res){
+  if(p.iceGatheringState==='complete') return res();
+  var to=setTimeout(res,1500);
+  p.addEventListener('icegatheringstatechange',function(){ if(p.iceGatheringState==='complete'){ clearTimeout(to); res(); } });
+}); }
+function startCast(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getDisplayMedia){ setSt('此浏览器不支持屏幕捕获','bad'); return; }
+  ensureWs();
+  navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:12,max:15}},audio:false}).then(function(stream){
+    track=stream.getVideoTracks()[0];
+    track.onended=function(){ stopCast(); };
+    try{ track.applyConstraints&&track.applyConstraints({width:{ideal:1280},height:{ideal:800}}); }catch(e){}
+    v.srcObject=new MediaStream([track]);
+    v.play().catch(function(){});
+    v.style.display='block';
+    capP.textContent='投屏中'; capP.className='pill ok';
+    pc=new RTCPeerConnection({iceServers:[]});
+    pc.addTrack(track,v.srcObject);
+    pc.onconnectionstatechange=function(){ if(pc&&pc.connectionState==='failed'){ setSt('画面通道失败,点「开始投屏」重试','bad'); } };
+    dc=pc.createDataChannel('frames',{ordered:true,maxRetransmits:0});
+    dc.binaryType='arraybuffer';
+    dc.onopen=function(){ meta.textContent='画面已推流 · 平板打开 /cast 查看'; ensureHiddenFrames(); };
+    dc.onclose=function(){};
+    pc.createOffer().then(function(o){ return pc.setLocalDescription(o); }).then(iceDone).then(function(){
+      send({t:'offer',sdp:pc.localDescription.sdp});
+      gotAns=false; clearTimeout(ansT);
+      ansT=setTimeout(function(){ if(!gotAns) setSt('平板端未应答(观看页没开?)','bad'); },8000);
+    });
+  }).catch(function(e){
+    setSt('未开始投屏','bad');
+    toast('投屏被取消或不支持: '+(e&&e.message||e.name||''));
+  });
+}
+function stopCast(){
+  try{ track&&track.stop(); }catch(e){}
+  try{ dc&&dc.close(); }catch(e){}
+  try{ pc&&pc.close(); }catch(e){}
+  track=dc=pc=null;
+  v.srcObject=null; v.style.display='none';
+  capP.textContent='未投屏'; capP.className='pill';
+  if(hidIv){ clearInterval(hidIv); hidIv=0; }
+}
+/* 后台标签节流补偿:rAF 被压到 2fps 时,用定时器把 <video> 画面抽帧直推(不走 canvas.toBlob,零编码开销由 JPEG 编码器负责) */
+function ensureHiddenFrames(){
+  if(hidIv) return;
+  var lastW=0,lastH=0,cnv=document.createElement('canvas'),cx=cnv.getContext('2d');
+  hidIv=setInterval(function(){
+    if(!track||!dc||dc.readyState!=='open'||!document.hidden) return;
+    var w=v.videoWidth,h=v.videoHeight;
+    if(!w||!h) return;
+    var scale=Math.min(1,1280/w);
+    w=Math.round(w*scale); h=Math.round(h*scale);
+    if(w!==lastW||h!==lastH){ cnv.width=w; cnv.height=h; lastW=w; lastH=h; }
+    try{
+      cx.drawImage(v,0,0,w,h);
+      cnv.toBlob(function(b){
+        if(!b||!dc||dc.readyState!=='open') return;
+        var r=new FileReader();
+        r.onload=function(){ try{ dc&&dc.readyState==='open'&&dc.send(r.result); }catch(e){} };
+        r.readAsArrayBuffer(b);
+      },'image/jpeg',0.55);
+    }catch(e){}
+  },240);
+}
+
+/* ---------- 入口交互 ---------- */
+$('go').onclick=function(){ navTo($('u').value.trim()); };
+$('u').addEventListener('keydown',function(e){ if(e.key==='Enter') navTo($('u').value.trim()); });
+$('cast').onclick=startCast;
+$('back').onclick=function(){ try{ f.contentWindow&&f.contentWindow.history.back(); }catch(e){} };
+$('reload').onclick=function(){ try{ f.contentWindow&&f.contentWindow.location.reload(); }catch(e){ f.src=f.src; } };
+$('hintX').onclick=function(){ $('hint').style.display='none'; };
+window.addEventListener('beforeunload',stopCast);
+try{ if(localStorage.getItem('castHint')==='1') $('hint').style.display='none'; }catch(e){}
+$('hintX').addEventListener('click',function(){ try{ localStorage.setItem('castHint','1'); }catch(e){} });
+setSt('连接中…','');
+ensureWs();
+navTo(new URLSearchParams(location.search).get('url')||'https://www.qq.com');
+</script>
+</body>
+</html>
