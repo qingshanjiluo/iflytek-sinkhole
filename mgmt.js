@@ -429,26 +429,33 @@ async function wlanAdapterSet(enable) {
   const act = enable ? '启用' : '禁用';
   const ifaces = netshWifiIfaces();
   const d = wlanAdapterDiag();
+  let opOk = false; // 至少一次真实成功才算 ok(设备物理掉线时 pnputil rc=1167,不能谎报成功)
+  let opFail = 0;
   if (ifaces.length) {
     for (const it of ifaces) {
       const r = runSync('netsh', ['interface', 'set', 'interface', `name=${it.name}`, `admin=${enable ? 'enable' : 'disable'}`], { timeout: 15000 });
       push(`netsh [${it.name}] admin=${enable ? 'enable' : 'disable'}: ${r.ok ? 'OK' : (r.all || r.sysErr || '').slice(0, 130)}`);
+      if (r.ok) opOk = true; else opFail++;
     }
   } else {
     push('netsh 无无线接口行 → 直接操作 PnP 设备');
   }
   // 接口不在 netsh 列表(卡死态)或需要彻底级操作 → pnputil 设备级启停
   if (!ifaces.length) {
-    if (!d.adapters.length) push(`${act}失败: 没找到物理无线网卡`);
+    if (!d.adapters.length) { push(`${act}失败: 没找到物理无线网卡(USB 掉了?)`); opFail++; }
     for (const a of d.adapters) {
       const r = runSync('pnputil', [enable ? '/enable-device' : '/disable-device', a.id], { timeout: 20000 });
       push(`pnputil ${act}「${a.desc}」: ${r.ok ? 'OK' : 'rc=' + r.code + ' ' + (r.all || r.sysErr || '').slice(0, 120)}`);
+      if (r.code === 1167) push('  ⚠ rc=1167「设备没有连接」= USB 物理掉线 → 先拔插网卡(换主板直连口),此操作无法在离线设备上生效');
+      if (r.ok) opOk = true; else opFail++;
     }
   }
   await slp(3000);
   const after = wlanAdapterDiag();
   push(`复检: 接口 ${after.ifaces.length ? after.ifaces.map(i => `${i.name}(admin=${i.admin},${i.state})`).join(', ') : '无'} | WlanSvc=${after.svc}`);
-  return { ok: enable ? after.ifaces.length > 0 : true, log: L, diag: after };
+  // enable 要求接口真出现; disable 要求无 Enabled 接口残留;两者都要至少一次操作成功(或本就已是目标态)
+  const target = enable ? after.ifaces.length > 0 : !after.ifaces.some(i => /^enabled$/i.test(i.admin));
+  return { ok: opOk ? target : (opFail === 0 && target), log: L, diag: after };
 }
 function pickNic(cfg) {
   const want = (cfg.relay && cfg.relay.hotspot && cfg.relay.hotspot.nic) || '';
@@ -1114,7 +1121,7 @@ async function menu() {
       const sub = (argv[1] || 'diag').toLowerCase();
       const needAdm = () => { if (!isAdmin()) { console.log('需要管理员：请用 管理中心.bat（会请求 UAC）'); process.exit(1); } };
       if (sub === 'on' || sub === 'enable') { needAdm(); const r = await wlanAdapterSet(true); r.log.forEach(m => console.log(m)); process.exit(r.ok ? 0 : 1); }
-      if (sub === 'off' || sub === 'disable') { needAdm(); const r = await wlanAdapterSet(false); r.log.forEach(m => console.log(m)); process.exit(0); }
+      if (sub === 'off' || sub === 'disable') { needAdm(); const r = await wlanAdapterSet(false); r.log.forEach(m => console.log(m)); process.exit(r.ok ? 0 : 1); }
       if (sub === 'repair' || sub === 'fix') { needAdm(); const r = await wlanAdapterRepair(); r.log.forEach(m => console.log(m)); process.exit(r.ok ? 0 : 1); }
       const d = wlanAdapterDiag();
       console.log(JSON.stringify({ verdict: d.verdict, svc: d.svc, adapters: d.adapters, ifaces: d.ifaces, drvs: d.drvs, issues: d.issues }, null, 1));
