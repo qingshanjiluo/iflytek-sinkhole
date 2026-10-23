@@ -78,6 +78,9 @@ code{background:#0b0e13;border:1px solid var(--line);border-radius:5px;padding:1
     <span style="width:14px"></span>
     <button class="act primary" onclick="act('hotspot-on')">开热点</button>
     <button class="act" onclick="act('hotspot-off')">关热点</button>
+    <button class="act" onclick="act('wlan-repair')" title="USB 无线网卡链路断/驱动报错时：拉 WlanSvc + 扫描设备 + 禁用启用循环">网卡一键修复</button>
+    <button class="act" onclick="act('wlan-off')" title="禁用无线网卡(netsh admin=disable，兜底 pnputil)">禁用网卡</button>
+    <button class="act" onclick="act('wlan-on')" title="启用无线网卡">启用网卡</button>
     <button class="act" onclick="act('install')">安装/修复注册项</button>
     <button class="act" onclick="act('fix')" id="btnFix" style="display:none">冲突归位</button>
   </div>
@@ -246,9 +249,9 @@ function renderCards(j){
 }
 function loadStatus(){xhr('GET','/api/status').then(function(d){lastJson=d.json;renderCards(d.json||{});$('fullText').textContent=d.text||''}).catch(function(e){toast('状态加载失败: '+e.message,true)})}
 function act(a){
-  var names={start:'启动服务',stop:'停止服务',restart:'重启服务','hotspot-on':'开热点','hotspot-off':'关热点',install:'安装/修复',fix:'冲突归位'};
+  var names={start:'启动服务',stop:'停止服务',restart:'重启服务','hotspot-on':'开热点','hotspot-off':'关热点','wlan-repair':'网卡一键修复','wlan-on':'启用网卡','wlan-off':'禁用网卡',install:'安装/修复',fix:'冲突归位'};
   if(!confirm('执行「'+(names[a]||a)+'」？'))return;
-  toast('执行中…（热点最长 70 秒，请等待）');
+  toast('执行中…（热点/网卡修复最长 90 秒，请等待）');
   xhr('POST','/api/action',{action:a}).then(function(d){
     if(d.needAdmin){toast(d.msg||'需要管理员权限',true);return}
     var msg=d.msg||(d.ok?'完成':'失败');

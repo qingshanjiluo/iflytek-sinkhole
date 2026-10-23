@@ -256,6 +256,15 @@ POST   /api/admin/visits         清空访问记录(留痕:时间/IP/路径/码/
 `document.hidden` 门死(平板可见时永远黑屏)。修后 11/11 全绿:双端连通、投屏、WebRTC
 connected、1280px 画面送达、反控光标闭环。
 
+**v10.3 网卡工具(同日)**:管理中心新增 `[w] 网卡工具` / CLI `node mgmt.js wlan diag|repair|on|off`
+/ 管理台三按钮(网卡一键修复/禁用网卡/启用网卡)——把过去"要你插拔网卡"的一句话提示升级为
+可操作闭环:**监测**(pnputil 枚举物理无线卡+netsh 接口表+WlanSvc 服务+驱动承载网络支持,中英文
+状态都认)、**修复**(拉 WlanSvc → `pnputil /scan-devices`×3 → 禁用→启用循环 → 复检)、
+**禁用/启用**(netsh `admin=disable/enable` 优先,接口表没有时兜底 `pnputil /disable|/enable-device`)。
+诊断分级能区分"可软件修"(服务没起/接口被禁用/驱动报错)与"必须动手"(rc=1167「设备没有连接」=
+USB 总线物理掉线,给出换主板直连口/避前置面板建议);只动无线网卡(过滤虚拟/Hyper-V/WAN Miniport),
+不碰代理、不动任务、不碰服务进程。Win10+ 走 pnputil,Win7 回退 wmic 解析。
+
 ## 已知限制
 
 - 浏览器 DoH(安全 DNS)/安卓私有 DNS/写死公共 DNS 的设备会绕过拦截

@@ -9,6 +9,7 @@
  *   status          状态摘要（机器可读，--json 出 JSON）
  *   start|stop|restart   服务进程管理（多副本感知）
  *   hotspot on|off|status  经典 SoftAP 热点（纯 netsh，Win7 可用）
+ *   wlan diag|repair|on|off  USB 无线网卡 环境监测/一键修复/禁用/启用（pnputil+netsh，Win10+）
  *   install         注册 3 个计划任务 + 4 条防火墙规则（全部指向本文件夹）
  *   conflicts [--fix]    冲突检测：发现所有“别的副本”的任务/进程；--fix 归位到本文件夹
  *   uninstall [--dry|--purge|--cert]  一键卸载（默认只删注册项，文件保留）
@@ -306,6 +307,148 @@ function wlanDrivers() {
     out.push({ name: nm[1].trim(), supported: sup ? /^y|^是/i.test(sup[1].trim()) : null });
   }
   return out;
+}
+/* ---------- 网卡工具(v10.3):环境监测 / 一键修复 / 禁用·启用 ----------
+ * 背景:USB 网卡通常见「设备在树里但链路断」(pnputil Status=Disconnected / netsh 看不到接口)
+ * → 热点起不来只提示"插拔网卡"很被动。这里给完整闭环:
+ *   监测 = pnputil 枚举物理无线卡 + netsh 接口表 + WlanSvc 服务 + 驱动承载网络支持
+ *   修复 = 拉 WlanSvc → pnputil /scan-devices(×3) → 禁用→启用循环(卡死态最有效) → 复检
+ *   禁用/启用 = netsh admin=disable/enable(接口在列表时) → 兜底 pnputil /disable|/enable-device
+ * 只动无线网卡(过滤虚拟/Hyper-V/WAN Miniport),不碰代理、不动计划任务、不碰服务进程。 */
+const WIFI_NAME_RE = /wi-?fi|wireless|wlan|802\.11|wifi|无线/i;
+const WIFI_VIRT_RE = /virtual|direct|hosted network|hyper-v|wan miniport|miniport|vethernet|vswitch|tunnel/i;
+function pnpAdapters() {
+  // Win10+: pnputil /enum-devices /class Net;Win7 无此开关 → 回退 wmic
+  const r = runSync('pnputil', ['/enum-devices', '/class', 'Net'], { timeout: 25000 });
+  const out = [];
+  if (/\bInstance ID\b|实例\s*ID/i.test(r.out || '')) {
+    for (const blk of r.all.split(/(?=^\s*(?:Instance ID|实例\s*ID)\s*:)/m)) {
+      const id = blk.match(/^\s*(?:Instance ID|实例\s*ID)\s*:\s*(.+)$/m);
+      if (!id) continue;
+      const desc = blk.match(/^\s*(?:Device Description|设备描述)\s*:\s*(.+)$/m);
+      const st = blk.match(/^\s*(?:Status|状态)\s*:\s*(.+)$/m);
+      const drv = blk.match(/^\s*(?:Driver Name|驱动程序名称)\s*:\s*(.+)$/m);
+      out.push({ id: id[1].trim(), desc: (desc ? desc[1] : '').trim(), status: (st ? st[1] : '').trim(), driver: (drv ? drv[1] : '').trim() });
+    }
+    if (out.length) return out;
+  }
+  const w = runSync('wmic', ['path', 'Win32_PnPEntity', 'where', "PNPClass='Net'", 'get', 'Name,Status,DeviceID', '/format:csv'], { timeout: 25000 });
+  const lines = (w.all || '').split(/\r?\n/);
+  const hdr = lines.find(l => /^Node,/.test(l));
+  if (hdr) {
+    const cols = hdr.split(',').map(s => s.trim());
+    for (const ln of lines) {
+      const v = ln.split(',');
+      if (v.length < cols.length || !/^[\w-]+$/.test(v[0] || '')) continue;
+      const row = {}; cols.forEach((c, i) => { row[c] = (v[i] || '').trim(); });
+      if (!row.Name) continue;
+      out.push({ id: row.DeviceID || '', desc: row.Name, status: row.Status || '', driver: '' });
+    }
+  }
+  return out;
+}
+function physicalWifiAdapters() {
+  return pnpAdapters().filter(a => WIFI_NAME_RE.test(a.desc) && !WIFI_VIRT_RE.test(a.desc));
+}
+function wlanSvcState() {
+  const r = runSync('sc', ['query', 'WlanSvc'], { timeout: 8000 });
+  const m = /STATE\s*:\s*\d+\s+(\w+)/i.exec(r.all || '');
+  return m ? m[1] : '?';
+}
+function netshWifiIfaces() {
+  // netsh interface show interface → 行: Admin State State Type Interface Name
+  const r = runSync('netsh', ['interface', 'show', 'interface'], { timeout: 10000 });
+  const out = [];
+  for (const line of (r.all || '').split(/\r?\n/)) {
+    const m = /^\s*(Enabled|Disabled)\s+(\S+)\s+\S+\s+(.+?)\s*$/i.exec(line);
+    if (m && WIFI_NAME_RE.test(m[3]) && !WIFI_VIRT_RE.test(m[3])) out.push({ admin: m[1], state: m[2], name: m[3].trim() });
+  }
+  return out;
+}
+function wlanAdapterDiag() {
+  const adapters = physicalWifiAdapters();
+  const ifaces = netshWifiIfaces();
+  const svc = wlanSvcState();
+  const drvs = wlanDrivers();
+  const issues = [];
+  if (!adapters.length) issues.push('设备树里没有物理无线网卡(USB 没插/枚举丢失) → 换个 USB 口重插网卡,再点「一键修复」');
+  else {
+    for (const a of adapters) {
+      if (/error|problem|错误|有问题/i.test(a.status)) issues.push(`「${a.desc}」状态=${a.status}(驱动报错) → 点「一键修复」`);
+      else if (/disconnect|已断开|已停用|未连接/i.test(a.status) && !ifaces.length) issues.push(`「${a.desc}」状态=${a.status} 且系统无无线接口(netsh 看不到) → 链路断,点「一键修复」`);
+    }
+    if (!ifaces.length && !issues.length) issues.push('物理网卡在,但 netsh 无无线接口 → 点「一键修复」/「启用网卡」');
+  }
+  if (svc !== 'RUNNING' && svc !== '?') issues.push(`WlanSvc(无线配置服务)=${svc} → 点「一键修复」会自动拉起`);
+  if (ifaces.some(i => i.admin === 'Disabled')) issues.push('无线接口处于禁用态 → 点「启用网卡」');
+  if (drvs.length && drvs.every(d => d.supported === false)) issues.push('驱动不支持承载网络(热点开不了) → 换支持 AP 的驱动/网卡');
+  return {
+    ok: issues.length === 0, verdict: issues.length ? 'NG' : 'OK',
+    adapters, ifaces, svc, drvs: drvs.map(d => ({ name: d.name, supported: d.supported })),
+    issues
+  };
+}
+async function wlanAdapterRepair() {
+  const L = [];
+  const push = m => { L.push(m); logFile('wlan.log', m); };
+  let d = wlanAdapterDiag();
+  push(`修复前 ${d.verdict}: 物理卡${d.adapters.length} 接口${d.ifaces.length} WlanSvc=${d.svc}${d.issues.length ? ' | ' + d.issues.join('; ') : ''}`);
+  if (d.svc !== 'RUNNING' && d.svc !== '?') {
+    const r = runSync('net', ['start', 'WlanSvc'], { timeout: 30000 });
+    push(`拉起 WlanSvc: ${r.ok ? 'OK' : '失败 ' + (r.all || r.sysErr || '').slice(0, 120)}`);
+    await slp(1500);
+  }
+  for (let i = 1; i <= 3 && wlanAdapterDiag().ifaces.length === 0; i++) {
+    const r = runSync('pnputil', ['/scan-devices'], { timeout: 30000 });
+    push(`pnputil /scan-devices 第${i}次: ${r.ok ? 'OK' : 'rc=' + r.code + ' ' + (r.all || r.sysErr || '').slice(0, 100)}`);
+    await slp(5000);
+  }
+  d = wlanAdapterDiag();
+  if (d.ifaces.length === 0 && d.adapters.length) {
+    for (const a of d.adapters) {
+      push(`「${a.desc}」执行 禁用→启用 循环(卡死态最有效)…`);
+      const dis = runSync('pnputil', ['/disable-device', a.id], { timeout: 20000 });
+      push(`  禁用: ${dis.ok ? 'OK' : 'rc=' + dis.code + ' ' + (dis.all || dis.sysErr || '').slice(0, 110)}`);
+      if (dis.code === 1167) { push('  ⚠ rc=1167「设备没有连接」= USB 总线物理掉线,软件修不了 → 必须拔插网卡(换主板直连 USB 口,避开前置面板/USB3 高频干扰),插回后再点修复'); break; }
+      await slp(2000);
+      const en = runSync('pnputil', ['/enable-device', a.id], { timeout: 20000 });
+      push(`  启用: ${en.ok ? 'OK' : 'rc=' + en.code + ' ' + (en.all || en.sysErr || '').slice(0, 110)}`);
+      await slp(5000);
+    }
+  }
+  d = wlanAdapterDiag();
+  push(`修复后 ${d.verdict}: 物理卡${d.adapters.length} 接口${d.ifaces.length} WlanSvc=${d.svc}`);
+  if (d.ok) push('环境正常 ✓ 可直接菜单[5]开热点');
+  else if (!d.adapters.length) push('仍无物理卡 → USB 掉了:拔插网卡(前面板换主板直连口)后再点修复');
+  else push('仍异常: ' + d.issues.join('; '));
+  return { ok: d.ok, log: L, diag: d };
+}
+async function wlanAdapterSet(enable) {
+  const L = [];
+  const push = m => { L.push(m); logFile('wlan.log', m); };
+  const act = enable ? '启用' : '禁用';
+  const ifaces = netshWifiIfaces();
+  const d = wlanAdapterDiag();
+  if (ifaces.length) {
+    for (const it of ifaces) {
+      const r = runSync('netsh', ['interface', 'set', 'interface', `name=${it.name}`, `admin=${enable ? 'enable' : 'disable'}`], { timeout: 15000 });
+      push(`netsh [${it.name}] admin=${enable ? 'enable' : 'disable'}: ${r.ok ? 'OK' : (r.all || r.sysErr || '').slice(0, 130)}`);
+    }
+  } else {
+    push('netsh 无无线接口行 → 直接操作 PnP 设备');
+  }
+  // 接口不在 netsh 列表(卡死态)或需要彻底级操作 → pnputil 设备级启停
+  if (!ifaces.length) {
+    if (!d.adapters.length) push(`${act}失败: 没找到物理无线网卡`);
+    for (const a of d.adapters) {
+      const r = runSync('pnputil', [enable ? '/enable-device' : '/disable-device', a.id], { timeout: 20000 });
+      push(`pnputil ${act}「${a.desc}」: ${r.ok ? 'OK' : 'rc=' + r.code + ' ' + (r.all || r.sysErr || '').slice(0, 120)}`);
+    }
+  }
+  await slp(3000);
+  const after = wlanAdapterDiag();
+  push(`复检: 接口 ${after.ifaces.length ? after.ifaces.map(i => `${i.name}(admin=${i.admin},${i.state})`).join(', ') : '无'} | WlanSvc=${after.svc}`);
+  return { ok: enable ? after.ifaces.length > 0 : true, log: L, diag: after };
 }
 function pickNic(cfg) {
   const want = (cfg.relay && cfg.relay.hotspot && cfg.relay.hotspot.nic) || '';
@@ -686,9 +829,16 @@ async function check(o) {
     P('!!', `热点未启动但 relay.hotspot 已配置（${c.cfg.relay.hotspot.ssid || '默认SSID'} / nic=${c.cfg.relay.hotspot.nic || '自动'}）—— 局域网设备(平板等)此刻连不上网！ 菜单[5]开热点 或 管理台「开热点」`);
     j.hotspotShouldRun = true;
   }
-  if (supp.length) P('OK', `无线网卡 ${supp.map(d => d.name + (d.supported ? '✓' : '✗')).join(' / ')} 承载网络支持`);
-  else if (drvs.length) P('!!', `无线网卡 ${drvs.map(d => d.name).join('/')} 驱动不支持承载网络（或驱动太老）`);
-  else P('!!', '未检测到无线网卡（USB 网卡插好了吗？）');
+    if (supp.length) P('OK', `无线网卡 ${supp.map(d => d.name + (d.supported ? '✓' : '✗')).join(' / ')} 承载网络支持`);
+    else if (drvs.length) P('!!', `无线网卡 ${drvs.map(d => d.name).join('/')} 驱动不支持承载网络（或驱动太老）`);
+    else {
+      // netsh 看不到驱动 → 网卡工具深查(物理卡状态/服务/接口),把"插拔"提示升级成可操作诊断
+      try {
+        const wd = wlanAdapterDiag();
+        if (wd.adapters.length) P('!!', `无线网卡「${wd.adapters.map(a => a.desc + '(' + a.status + ')').join(' / ')}」在设备树但系统无接口 — ${wd.issues[0] || '见菜单[w]'}  · 管理中心菜单 [w] 网卡工具`);
+        else P('!!', '未检测到无线网卡（USB 掉了？换口重插）→ 管理中心菜单 [w] 网卡工具可监测/修复/启停');
+      } catch { P('!!', '未检测到无线网卡（USB 网卡插好了吗？）'); }
+    }
   // 别的 DHCP 抢答（路由器没改 DNS/关 DHCP，或热点网段与路由器桥接）→ 设备拿到错网关/错 DNS，拦截失效
   try {
     const rf = path.join(ROOT, 'storage', 'dhcp-rivals.json');
@@ -779,7 +929,7 @@ async function serve(o) {
       if (req.method === 'POST' && u.pathname === '/api/action') {
         const b = await readBody() || {};
         const act = String(b.action || '');
-        const needAdmin = ['start', 'install', 'uninstall', 'fix', 'hotspot-on', 'hotspot-off', 'restart'].indexOf(act) !== -1;
+        const needAdmin = ['start', 'install', 'uninstall', 'fix', 'hotspot-on', 'hotspot-off', 'restart', 'wlan-repair', 'wlan-on', 'wlan-off'].indexOf(act) !== -1;
         if (needAdmin && !isAdmin()) return send(200, { ok: false, needAdmin: true, msg: '此操作需要管理员：请关掉本台，右键 管理中心.bat → 以管理员身份运行' });
         switch (act) {
           case 'start': return send(200, await startSvc(), 'json');
@@ -787,6 +937,10 @@ async function serve(o) {
           case 'restart': { await stopSvc(); return send(200, await startSvc(), 'json'); }
           case 'hotspot-on': return send(200, await hotspotStart({}), 'json');
           case 'hotspot-off': return send(200, await hotspotStop(), 'json');
+          case 'wlan-diag': return send(200, { ok: true, diag: wlanAdapterDiag() }, 'json');
+          case 'wlan-repair': return send(200, await wlanAdapterRepair(), 'json');
+          case 'wlan-on': return send(200, await wlanAdapterSet(true), 'json');
+          case 'wlan-off': return send(200, await wlanAdapterSet(false), 'json');
           case 'install': return send(200, { ok: true, result: installAll() }, 'json');
           case 'uninstall-dry': return send(200, await uninstall({ dry: true }), 'json');
           case 'uninstall': return send(200, await uninstall({}), 'json');
@@ -851,6 +1005,7 @@ async function menu() {
     ['5', '开热点（SoftAP）'], ['6', '关热点'], ['7', '热点状态'],
     ['8', '安装/修复（注册 3 任务 + 防火墙，全部指向本文件夹）'],
     ['9', '冲突治理（发现并归位“别的副本”的任务/进程）'],
+    ['w', '网卡工具（USB 无线网卡 监测/一键修复/禁用·启用）'],
     ['a', '打开可视化管理台（网页配置/状态/日志）'],
     ['u', '一键卸载（默认保留文件；子菜单可选删文件夹）'],
     ['0', '退出']
@@ -883,6 +1038,14 @@ async function menu() {
           const y = (await ask(' 归位到本文件夹并停掉别的副本服务？(y/N) ')).trim().toLowerCase();
           if (y === 'y') { const r = await conflictsFix(); r.steps.forEach(s => console.log('  ' + s)); }
         } else console.log('  无冲突。');
+      }
+      else if (a === 'w') {
+        console.log('  [1] 网卡环境监测  [2] 一键修复(拉服务/扫描/禁启用)  [3] 禁用无线网卡  [4] 启用无线网卡  [0] 返回');
+        const w = (await ask('  选择> ')).trim();
+        if (w === '1') { const d = wlanAdapterDiag(); console.log(JSON.stringify({ verdict: d.verdict, svc: d.svc, adapters: d.adapters, ifaces: d.ifaces, drvs: d.drvs, issues: d.issues }, null, 1)); }
+        else if (w === '2') { if (!isAdmin()) console.log('需要管理员（请用 管理中心.bat 以管理员重开）'); else { const r = await wlanAdapterRepair(); console.log(r.log.join('\n')); } }
+        else if (w === '3') { if (!isAdmin()) console.log('需要管理员'); else { const r = await wlanAdapterSet(false); console.log(r.log.join('\n')); } }
+        else if (w === '4') { if (!isAdmin()) console.log('需要管理员'); else { const r = await wlanAdapterSet(true); console.log(r.log.join('\n')); } }
       }
       else if (a === 'a') { const r = await serve({ open: true }); return r; }
       else if (a === 'u') {
@@ -947,6 +1110,16 @@ async function menu() {
       if (!r.ok && !(r.log || []).length) console.log('热点启动失败');
       process.exit(r.ok ? 0 : 1);
     }
+    else if (cmd === 'wlan') {
+      const sub = (argv[1] || 'diag').toLowerCase();
+      const needAdm = () => { if (!isAdmin()) { console.log('需要管理员：请用 管理中心.bat（会请求 UAC）'); process.exit(1); } };
+      if (sub === 'on' || sub === 'enable') { needAdm(); const r = await wlanAdapterSet(true); r.log.forEach(m => console.log(m)); process.exit(r.ok ? 0 : 1); }
+      if (sub === 'off' || sub === 'disable') { needAdm(); const r = await wlanAdapterSet(false); r.log.forEach(m => console.log(m)); process.exit(0); }
+      if (sub === 'repair' || sub === 'fix') { needAdm(); const r = await wlanAdapterRepair(); r.log.forEach(m => console.log(m)); process.exit(r.ok ? 0 : 1); }
+      const d = wlanAdapterDiag();
+      console.log(JSON.stringify({ verdict: d.verdict, svc: d.svc, adapters: d.adapters, ifaces: d.ifaces, drvs: d.drvs, issues: d.issues }, null, 1));
+      process.exit(d.ok ? 0 : 1);
+    }
     else if (cmd === 'install') {
       if (!isAdmin()) { console.log('需要管理员：请用 管理中心.bat（会请求 UAC）或右键管理员运行本命令'); process.exit(1); }
       const r = installAll();
@@ -969,7 +1142,7 @@ async function menu() {
       process.exit(r.ok ? 0 : 1);
     }
     else if (cmd === 'serve') process.exit(await serve({ open: has('--open') }));
-    else { console.log('用法: node mgmt.js [menu|check|status|start|stop|restart|hotspot on|off|status|install|conflicts [--fix]|uninstall [--dry|--purge|--cert]|serve [--open]]'); process.exit(2); }
+    else { console.log('用法: node mgmt.js [menu|check|status|start|stop|restart|hotspot on|off|status|wlan diag|repair|on|off|install|conflicts [--fix]|uninstall [--dry|--purge|--cert]|serve [--open]]'); process.exit(2); }
   } catch (e) {
     console.error('FATAL: ' + (e.stack || e.message));
     process.exit(1);
