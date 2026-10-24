@@ -221,7 +221,8 @@ function applyCtrl(o){
   if(ev==='click'){ ctrl.down=true; fire(el,'pointerdown',{clientX:p.x,clientY:p.y,buttons:1}); fire(el,'mousedown',{clientX:p.x,clientY:p.y,buttons:1}); ctrl.lx=p.x; ctrl.ly=p.y; }
   else if(ev==='up'||ev==='release'){ ctrl.down=false; fire(el,'pointerup',{clientX:p.x,clientY:p.y,buttons:0}); fire(el,'mouseup',{clientX:p.x,clientY:p.y,buttons:0}); if(ev==='up') fire(el,'click',{clientX:p.x,clientY:p.y}); }
   else if(ev==='move'){
-    if(ctrl.down){ var dx=p.x-ctrl.lx, dy=p.y-ctrl.ly; fire(el,'wheel',{clientX:p.x,clientY:p.y,dx:dx,dy:dy}); ctrl.lx=p.x; ctrl.ly=p.y; }
+    // 拖动=内容跟手指手:向下拖(位置 dy>0)页面要向上滚(wheel deltaY<0)→ 必须取负,否则平板页面跟手反着跑
+    if(ctrl.down){ var dx=p.x-ctrl.lx, dy=p.y-ctrl.ly; fire(el,'wheel',{clientX:p.x,clientY:p.y,dx:-dx,dy:-dy}); ctrl.lx=p.x; ctrl.ly=p.y; }
     fire(el,'pointermove',{clientX:p.x,clientY:p.y,buttons:ctrl.down?1:0});
   }
   else if(ev==='wheel'){ fire(el,'wheel',{clientX:p.x,clientY:p.y,dx:o.dx||0,dy:o.dy||0}); }

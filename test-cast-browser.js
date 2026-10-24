@@ -187,6 +187,75 @@ function get(url) {
     T('iframe 坐标命中(非空)', hitOk && hitOk.ok && hitOk.tag, JSON.stringify(hitOk));
   }
 
+  // 5) 平板触摸套件(CDP Input.dispatchTouchEvent → pointerType=touch;覆盖 v10.3.3 三个触摸修复)
+  await H.eval(`(function(){window.__ctrls=[];window.__wheels=[];var w=ws,oldm=w.onmessage;w.onmessage=function(e){if(typeof e.data==='string'){try{var o=JSON.parse(e.data);if(o.t==='ctrl')window.__ctrls.push(o);}catch(x){}}return oldm?oldm.apply(this,arguments):null};var oldF=fire;fire=function(el,t,o){if(t==='wheel'){window.__wheels.push({dx:(o&&o.dx)||0,dy:(o&&o.dy)||0});}return oldF.apply(null,arguments);};return 'ok';})()`);
+  const evsOf = async () => (await H.eval(`window.__ctrls.map(function(o){return o.ev})`)) || [];
+  const resetCtrl = async () => { await H.eval(`window.__ctrls=[];window.__wheels=[];'ok'`); };
+  const tbox = await V.eval(`(function(){var r=cv.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2),w:r.width,h:r.height}})()`);
+  T('触摸测试画布可用', !!tbox && tbox.w > 60 && tbox.h > 60, JSON.stringify(tbox));
+  if (tbox && tbox.w > 60) {
+    // 5a) 抖动点按:10px 抖动仍是 tap(旧阈值8px会误判成拖动→点按失灵)
+    await resetCtrl();
+    await V.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tbox.x, y: tbox.y }] });
+    await sleep(70);
+    await V.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: tbox.x + 10, y: tbox.y + 10 }] });
+    await sleep(70);
+    await V.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(800);
+    const e1 = await evsOf();
+    T('触摸点按(10px抖动)→ click..up 非 release', e1[0] === 'click' && e1[e1.length - 1] === 'up' && e1.indexOf('release') === -1, e1.join(','));
+    const mcT = await H.eval(`document.getElementById('mc').style.display`);
+    T('触摸点按→ host 光标标记', mcT === 'block', 'mc=' + mcT);
+
+    // 5b) 拖动方向=内容跟手:下拖(位置 dy>0)必须产出 wheel dy<0(旧码同号=页面跟手反跑)
+    await resetCtrl();
+    const y0 = tbox.y - 40;
+    await V.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tbox.x, y: y0 }] });
+    for (let i = 1; i <= 6; i++) { await V.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: tbox.x, y: y0 + i * 14 }] }); await sleep(50); }
+    await V.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(800);
+    const e2 = await evsOf();
+    const wh = (await H.eval(`window.__wheels`)) || [];
+    const sumDy = wh.reduce((s, x) => s + x.dy, 0);
+    T('拖动序列 click..move..release', e2[0] === 'click' && e2.indexOf('move') !== -1 && e2[e2.length - 1] === 'release', e2.join(','));
+    T('拖动跟手:下拖→wheel dy<0', wh.length > 0 && sumDy < 0, 'wheels=' + wh.length + ' sumDy=' + sumDy);
+
+    // 5c) pointercancel → release(host 松开按下态,不卡拖动)
+    await resetCtrl();
+    await V.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tbox.x, y: tbox.y - 30 }] });
+    await sleep(70);
+    await V.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: tbox.x, y: tbox.y - 10 }] });
+    await sleep(70);
+    await V.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+    await sleep(800);
+    const e3 = await evsOf();
+    T('pointercancel→ release(松开 host 按下态)', e3.indexOf('move') !== -1 && e3[e3.length - 1] === 'release', e3.join(','));
+
+    // 5d) 鼠标双击→ host 恰好 1 次 dbl(旧码 合成+原生 双发=误触三击选段)
+    await sleep(800); // 让触摸合成 dbl 的抑制窗(700ms)过去
+    await V.eval(`(function(){window.__pd=0;window.__pm=0;window.__pu=0;window.__dbl=0;
+      if(!window.__hook3){window.__hook3=1;
+        cv.addEventListener('pointerdown',function(){window.__pd++});
+        cv.addEventListener('pointermove',function(){window.__pm++});
+        cv.addEventListener('pointerup',function(){window.__pu++});
+        cv.addEventListener('dblclick',function(){window.__dbl++});}
+      window.__pd=window.__pm=window.__pu=window.__dbl=0;
+      window.__sent=[];if(!window.__sw){window.__sw=1;var os=ws.send.bind(ws);ws.send=function(d){try{var o=JSON.parse(d);if(o.t==='ctrl')window.__sent.push(o.ev)}catch(x){}return os(d)}}
+      window.__sent=[];return 'hooked';})()`);
+    await resetCtrl();
+    for (let k = 0; k < 2; k++) {
+      await V.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: tbox.x, y: tbox.y, button: 'left', buttons: 1, clickCount: k ? 2 : 1 });
+      await V.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: tbox.x, y: tbox.y, button: 'left', buttons: 0, clickCount: k ? 2 : 1 });
+      await sleep(120);
+    }
+    await sleep(700);
+    const e4 = await evsOf();
+    const dblN = e4.filter(x => x === 'dbl').length;
+    const native = await V.eval(`({pd:window.__pd,pu:window.__pu,dbl:window.__dbl,sent:(window.__sent||[]).join(','),drag:(typeof drag!=='undefined')?JSON.stringify({on:drag.on,id:drag.id,pt:drag.pt,moved:drag.moved}):'?'})`);
+    console.log('5d native=' + JSON.stringify(native) + ' hostSeq=' + e4.join(','));
+    T('鼠标双击→ host 恰好1次dbl', dblN === 1, 'dbl=' + dblN + ' seq=' + e4.join(',') + ' diag=' + JSON.stringify(native));
+  }
+
   H.close(); V.close();
   chrome.kill();
   await sleep(600);

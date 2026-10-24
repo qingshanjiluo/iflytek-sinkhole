@@ -272,6 +272,19 @@ USB 总线物理掉线,给出换主板直连口/避前置面板建议);只动无
 `next=//evil` 开放重定向被 `safeNext` 拦回 `/relay`。测试结束自动还原 `storage/sessions.json`,
 不污染活服务会话库。回归:语法×8 + 原生投屏 E2E 12/12 + 本测试 14/14。
 
+**v10.3.3 平板触摸反控修复(同日)**:双浏览器 E2E 扩展触摸套件(18 项)抓出 4 个真机平板必踩
+的缺陷并修复——①**relay ctrl 节流误杀**(根因:`relay-site.js` 对所有 ctrl 事件 20ms 一刀切,
+真机双击的 `up`/`dbl` 紧跟 `click` <20ms 被吞 → host 只收 `click,click`,双击失效、快按时卡在
+按下态;改为只节流 `move`/`wheel` 连续事件,离散事件必达);②**触摸点按阈值过严**(8px+400ms 双门
+→ 手指 10~20px 天然抖动被误判成拖动,点按时灵时不灵;触摸端放宽 24px、去掉时限,位移改单轴净
+位移防累计误差);③**拖动滚动方向反**(host 把拖动位移按鼠标语义合成 wheel → 平板页面跟手反着
+跑;改为取负=内容跟手指);④**多指/pointercancel 未处理**(第二指重置拖动、系统接管手势不发
+release → host 卡按下态;补 pointerId 过滤 + pointercancel→release)。另修双击双发(触摸合成
+`dbl` + 桌面原生 `dblclick` 撞车=host 收两次 dbl 误触三击选段;触摸合成后 700ms 抑制原生)。
+canvas 补 `touch-action:none`(body 的 CSS 不继承到子元素,依赖祖先链求交兜底不稳)。
+`setPointerCapture` 加 try(合成事件派发会抛 NotFoundError 掐死 pointerdown)。测试:
+浏览器 E2E 18/18、原生 12/12、鉴权 14/14、语法×8+内联×4 全绿。
+
 ## 已知限制
 
 - 浏览器 DoH(安全 DNS)/安卓私有 DNS/写死公共 DNS 的设备会绕过拦截

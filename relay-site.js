@@ -853,10 +853,13 @@ function castOnText(cli, raw) {
   }
   if (o.t === 'trickle') { const c = String(o.cand || '').slice(0, 4096); if (c) castToHost({ t: 'trickle', cand: c }); return; }
   if (o.t === 'ctrl') {
-    if (now - cli.lastCtrl < 20) return; // ≤50 次/秒,防事件风暴
-    cli.lastCtrl = now;
+    const ev = String(o.ev || '').slice(0, 16);
+    // 只节流连续型事件(move/wheel 防风暴);离散状态事件(click/up/release/dbl/key…)绝不能丢——
+    // 旧码 20ms 一刀切会吞掉紧跟 click 的 up/dbl(同帧背靠背):host 卡按下态、双击失效(v10.3.3 真机双击 E2E 抓出)
+    if (ev === 'move') { if (now - cli.lastMove < 20) return; cli.lastMove = now; }
+    else if (ev === 'wheel') { if (now - cli.lastWheel < 10) return; cli.lastWheel = now; }
     if (cast.host) castSend(cast.host, {
-      t: 'ctrl', ev: String(o.ev || '').slice(0, 16),
+      t: 'ctrl', ev,
       rx: +o.rx || 0, ry: +o.ry || 0, dx: +o.dx || 0, dy: +o.dy || 0,
       key: String(o.key || '').slice(0, 32), text: String(o.text || '').slice(0, 128),
     });
@@ -888,7 +891,7 @@ function wsCastAccept(req, socket) {
   socket.setNoDelay(true);
   const q = new URL(req.url, 'http://x').searchParams;
   const role = String(q.get('role') || '') === 'host' ? 'host' : 'view';
-  const cli = { socket, role, ip: clientIp(req), buf: Buffer.alloc(0), lastCtrl: 0, closed: false };
+  const cli = { socket, role, ip: clientIp(req), buf: Buffer.alloc(0), lastMove: 0, lastWheel: 0, closed: false };
   log(`[CAST] ws握手完成 role=${role} ${cli.ip}`);
   if (role === 'host') {
     if (cast.host && cast.host !== cli) { cast.host.closed = true; try { cast.host.socket.destroy(); } catch {} }

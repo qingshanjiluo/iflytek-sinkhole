@@ -18,7 +18,7 @@ header{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;gap:8
 header button{background:#1c2a38;color:#cfe0ef;border:1px solid #2d4256;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
 header button:active{background:#2d4256}
 main{position:absolute;inset:0;padding-top:34px;padding-bottom:46px;display:flex;align-items:center;justify-content:center}
-canvas#cv{max-width:100%;max-height:100%;background:#000;display:none;image-rendering:auto}
+canvas#cv{max-width:100%;max-height:100%;background:#000;display:none;image-rendering:auto;touch-action:none}
 video#v{display:none}
 #ph{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);text-align:center;color:#7d8f9f;font-size:14px;line-height:2;max-width:86%}
 #ph .big{font-size:42px}
@@ -162,33 +162,41 @@ function rel(e){
   var cxp=(e.clientX-r.left)/(r.width||1), cyp=(e.clientY-r.top)/(r.height||1);
   return {rx:Math.max(0,Math.min(1,cxp)), ry:Math.max(0,Math.min(1,cyp))};
 }
-var drag={on:false,moved:0,sx:0,sy:0,px:0,py:0,lt:0,t0:0}, lastTapT=0;
+var drag={on:false,moved:0,sx:0,sy:0,lt:0,t0:0,id:0,pt:'mouse'}, lastTapT=0, suppressDblUntil=0;
+function tapEps(){ return drag.pt==='touch'?24:8; } // 手指点按天然抖动10~20px:阈值太小=点按时灵时不灵;鼠标保持8px精确
 cv.addEventListener('pointerdown',function(e){
-  cv.setPointerCapture&&cv.setPointerCapture(e.pointerId);
+  if(drag.on&&e.pointerId!==drag.id) return; // 多指:第二根手指不重置拖动状态
   drag.on=true; drag.moved=0; drag.sx=e.clientX; drag.sy=e.clientY;
-  drag.px=e.clientX; drag.py=e.clientY; drag.t0=drag.lt=Date.now();
+  drag.t0=drag.lt=Date.now(); drag.id=e.pointerId; drag.pt=e.pointerType||'mouse';
+  try{ cv.setPointerCapture&&cv.setPointerCapture(e.pointerId); }catch(x){} // 合成事件/老浏览器可能抛 NotFoundError,不能掐死 pointerdown
   var p=rel(e);
   sendCtrl({ev:'click',rx:p.rx,ry:p.ry});
 });
 cv.addEventListener('pointermove',function(e){
-  if(!drag.on) return;
-  // 触摸端 movementX/Y 恒为 0(浏览器差异),必须用 clientX 手动累加,否则平板拖不动
-  drag.moved+=Math.abs(e.clientX-drag.px)+Math.abs(e.clientY-drag.py);
-  drag.px=e.clientX; drag.py=e.clientY;
+  if(!drag.on||e.pointerId!==drag.id) return;
+  // 触摸端 movementX/Y 恒为 0(浏览器差异):位移=clientX 相对起点的单轴净位移(累计和会把抖动算成拖动)
+  drag.moved=Math.max(Math.abs(e.clientX-drag.sx),Math.abs(e.clientY-drag.sy));
   var now=Date.now(); if(now-drag.lt<30) return; drag.lt=now;
   var p=rel(e); sendCtrl({ev:'move',rx:p.rx,ry:p.ry});
 });
 cv.addEventListener('pointerup',function(e){
-  if(!drag.on) return;
+  if(!drag.on||e.pointerId!==drag.id) return;
   drag.on=false;
-  var p=rel(e), quick=Date.now()-drag.t0<400, tap=drag.moved<8&&quick;
+  var p=rel(e), tap=drag.moved<tapEps(); // 不再要求<400ms:慢按也该是点击(点按天然偏慢),位移已由 moved 判定
   if(!tap){ sendCtrl({ev:'release',rx:p.rx,ry:p.ry}); return; } // 拖动结束:只抬手不触发 click(防误点链接)
   sendCtrl({ev:'up',rx:p.rx,ry:p.ry});
   var now=Date.now();
-  if(now-lastTapT<400) sendCtrl({ev:'dbl',rx:p.rx,ry:p.ry}); // 双击(触摸无原生 dblclick 兜底)
-  lastTapT=now;
+  if(drag.pt==='touch'){ // 双击只对触摸合成:桌面有原生 dblclick,两头都发=host 收到两次 dbl 会误触三击选段
+    if(now-lastTapT<400){ sendCtrl({ev:'dbl',rx:p.rx,ry:p.ry}); suppressDblUntil=now+700; }
+    lastTapT=now;
+  }
 });
-cv.addEventListener('dblclick',function(e){ var p=rel(e); sendCtrl({ev:'dbl',rx:p.rx,ry:p.ry}); });
+cv.addEventListener('pointercancel',function(e){ // 系统手势接管/多指缩放:必须松开 host 按下态,否则卡在拖动
+  if(!drag.on||e.pointerId!==drag.id) return;
+  drag.on=false;
+  var p=rel(e); sendCtrl({ev:'release',rx:p.rx,ry:p.ry});
+});
+cv.addEventListener('dblclick',function(e){ if(Date.now()<suppressDblUntil) return; var p=rel(e); sendCtrl({ev:'dbl',rx:p.rx,ry:p.ry}); });
 cv.addEventListener('wheel',function(e){ e.preventDefault(); sendCtrl({ev:'wheel',dx:e.deltaX,dy:e.deltaY}); },{passive:false});
 cv.addEventListener('contextmenu',function(e){ e.preventDefault(); });
 
